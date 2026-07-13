@@ -1,0 +1,37 @@
+const path = require('path');
+const Database = require('better-sqlite3');
+
+const db = new Database(path.join(__dirname, 'data.sqlite'));
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    character_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`);
+
+function createUser(username, passwordHash, character) {
+  const stmt = db.prepare(
+    'INSERT INTO users (username, password_hash, character_json, created_at) VALUES (?, ?, ?, ?)'
+  );
+  const info = stmt.run(username, passwordHash, JSON.stringify(character), new Date().toISOString());
+  return info.lastInsertRowid;
+}
+
+function getUserByUsername(username) {
+  return db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+}
+
+function getUserById(id) {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+function saveCharacter(userId, character) {
+  db.prepare('UPDATE users SET character_json = ? WHERE id = ?').run(JSON.stringify(character), userId);
+}
+
+module.exports = { db, createUser, getUserByUsername, getUserById, saveCharacter };
