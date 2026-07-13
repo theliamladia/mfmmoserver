@@ -82,6 +82,19 @@ app.get('/players/online', requireAuth, (req, res) => {
   res.json({ ok: true, players });
 });
 
+// Trust-based sync for everything that isn't server-authoritative yet (equipping titles/gear,
+// stat gains, etc.). The client pushes its full local character after every save() so the roster
+// and other read-only views elsewhere stay current. Not a security boundary -- same as every
+// other client-driven mutation until it's ported to a real do<X>() endpoint like /hustle/work.
+app.post('/character/sync', requireAuth, (req, res) => {
+  const { character } = req.body || {};
+  if (!character || typeof character !== 'object') {
+    return res.status(400).json({ ok: false, reason: 'Missing character.' });
+  }
+  saveCharacter(req.user.sub, character);
+  res.json({ ok: true });
+});
+
 app.post('/hustle/work', requireAuth, (req, res) => {
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
