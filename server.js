@@ -3,12 +3,17 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
-const { createUser, getUserByUsername, getUserById, saveCharacter } = require('./db');
+const { createUser, getUserByUsername, getUserById, saveCharacter, getOnlineUsers, touchLastSeen } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth } = require('./auth');
 const { newCharacter, doWork } = require('./gameLogic');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// A player counts as "online" if any authenticated request touched last_seen within this window.
+// requireAuth updates last_seen on every call, and the client polls /players/online well inside
+// this window, so anyone with the app open stays lit up here.
+const ONLINE_WINDOW_MS = 60 * 1000;
 
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
@@ -54,6 +59,7 @@ app.post('/auth/login', (req, res) => {
     return res.status(401).json({ ok: false, reason: 'Incorrect username or password.' });
   }
 
+  touchLastSeen(user.id);
   const token = issueToken(user.id, user.username);
   res.json({ ok: true, token, character: JSON.parse(user.character_json) });
 });
@@ -62,6 +68,20 @@ app.get('/me', requireAuth, (req, res) => {
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
   res.json({ ok: true, character: JSON.parse(user.character_json) });
+});
+
+app.get('/players/online', requireAuth, (req, res) => {
+  const rows = getOnlineUsers(Date.now() - ONLINE_WINDOW_MS);
+  const players = rows.map((row) => {
+    const character = JSON.parse(row.character_json);
+    return {
+      username: row.username,
+      firstName: character.firstName,
+      lastName: character.lastName,
+      you: row.username === req.user.username,
+    };
+  });
+  res.json({ ok: true, players });
 });
 
 app.post('/hustle/work', requireAuth, (req, res) => {

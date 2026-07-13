@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { touchLastSeen } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -28,6 +29,7 @@ function requireAuth(req, res, next) {
 
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    touchLastSeen(req.user.sub);
     next();
   } catch {
     res.status(401).json({ ok: false, reason: 'Invalid or expired token.' });
