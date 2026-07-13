@@ -72,15 +72,13 @@ app.get('/me', requireAuth, (req, res) => {
 
 app.get('/players/online', requireAuth, (req, res) => {
   const rows = getOnlineUsers(Date.now() - ONLINE_WINDOW_MS);
-  const players = rows.map((row) => {
-    const character = JSON.parse(row.character_json);
-    return {
-      username: row.username,
-      firstName: character.firstName,
-      lastName: character.lastName,
-      you: row.username === req.user.username,
-    };
-  });
+  // Send the full character so the client can compute the same title/rank badge it
+  // shows for you, instead of duplicating that display logic server-side.
+  const players = rows.map((row) => ({
+    username: row.username,
+    character: JSON.parse(row.character_json),
+    you: row.username === req.user.username,
+  }));
   res.json({ ok: true, players });
 });
 
