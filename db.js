@@ -21,6 +21,14 @@ if (!hasLastSeen) {
   db.exec('ALTER TABLE users ADD COLUMN last_seen INTEGER NOT NULL DEFAULT 0');
 }
 
+// Separate from `last_seen` (which just means "authenticated recently, anywhere in the app"):
+// this tracks whether the player is actually looking at the New Milos City tab right now, so the
+// Players Online roster can reflect real presence in that room instead of global app activity.
+const hasMilosLastSeen = db.prepare('PRAGMA table_info(users)').all().some((col) => col.name === 'milos_last_seen');
+if (!hasMilosLastSeen) {
+  db.exec('ALTER TABLE users ADD COLUMN milos_last_seen INTEGER NOT NULL DEFAULT 0');
+}
+
 // Server-wide state (pause + active modifier): a single shared row, same reasoning as the other
 // shared tables -- the admin's pause/modifier toggle has to be visible to every player, not just
 // stored per-character. Previously this lived in each browser's own local storage, which meant
@@ -183,6 +191,256 @@ function getOnlineUsers(sinceTs) {
   return db.prepare('SELECT username, character_json FROM users WHERE last_seen >= ?').all(sinceTs);
 }
 
+function touchMilosPresence(userId) {
+  db.prepare('UPDATE users SET milos_last_seen = ? WHERE id = ?').run(Date.now(), userId);
+}
+
+function clearMilosPresence(userId) {
+  db.prepare('UPDATE users SET milos_last_seen = 0 WHERE id = ?').run(userId);
+}
+
+function getMilosOnlineUsers(sinceTs) {
+  return db.prepare('SELECT username, character_json FROM users WHERE milos_last_seen >= ?').all(sinceTs);
+}
+
+// PvP duels: a real shared table (unlike character.combat, which is PvE-only and resolved
+// synchronously inside a single request) since both participants -- and their two separate
+// browsers polling independently -- need to see the same authoritative turn/HP state.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS duels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attacker_user_id INTEGER NOT NULL,
+    attacker_name TEXT NOT NULL,
+    target_user_id INTEGER NOT NULL,
+    target_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    turn_user_id INTEGER,
+    attacker_hp INTEGER,
+    attacker_max_hp INTEGER,
+    target_hp INTEGER,
+    target_max_hp INTEGER,
+    attacker_guarding INTEGER NOT NULL DEFAULT 0,
+    target_guarding INTEGER NOT NULL DEFAULT 0,
+    winner_user_id INTEGER,
+    last_action_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+function createDuelChallenge(attackerId, attackerName, targetId, targetName) {
+  const now = Date.now();
+  const stmt = db.prepare(
+    'INSERT INTO duels (attacker_user_id, attacker_name, target_user_id, target_name, status, last_action_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const info = stmt.run(attackerId, attackerName, targetId, targetName, 'pending', now, now);
+  return info.lastInsertRowid;
+}
+
+function getDuelById(id) {
+  return db.prepare('SELECT * FROM duels WHERE id = ?').get(id);
+}
+
+function getPendingDuelForTarget(targetId) {
+  return db.prepare("SELECT * FROM duels WHERE target_user_id = ? AND status = 'pending'").get(targetId);
+}
+
+function getActiveDuelForUser(userId) {
+  return db
+    .prepare("SELECT * FROM duels WHERE status = 'active' AND (attacker_user_id = ? OR target_user_id = ?)")
+    .get(userId, userId);
+}
+
+function getPendingOrActiveDuelForUser(userId) {
+  return db
+    .prepare(
+      "SELECT * FROM duels WHERE status IN ('pending', 'active') AND (attacker_user_id = ? OR target_user_id = ?)"
+    )
+    .get(userId, userId);
+}
+
+function updateDuel(id, fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const setClause = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  db.prepare(`UPDATE duels SET ${setClause} WHERE id = ?`).run(...values, id);
+}
+
+// Coinflip lobbies: a real shared table so an open lobby is visible to every other online player
+// until someone joins it, same reasoning as mtn_listings.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS coinflip_lobbies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_user_id INTEGER NOT NULL,
+    creator_name TEXT NOT NULL,
+    joiner_user_id INTEGER,
+    joiner_name TEXT,
+    wager REAL NOT NULL,
+    creator_side TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_side TEXT,
+    winner_user_id INTEGER,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );
+`);
+
+function createCoinflipLobby(creatorId, creatorName, wager, creatorSide) {
+  const stmt = db.prepare(
+    'INSERT INTO coinflip_lobbies (creator_user_id, creator_name, wager, creator_side, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const info = stmt.run(creatorId, creatorName, wager, creatorSide, 'open', Date.now());
+  return info.lastInsertRowid;
+}
+
+function getOpenCoinflipLobbies() {
+  return db.prepare("SELECT * FROM coinflip_lobbies WHERE status = 'open' ORDER BY created_at DESC").all();
+}
+
+function getCoinflipLobbyById(id) {
+  return db.prepare('SELECT * FROM coinflip_lobbies WHERE id = ?').get(id);
+}
+
+// Guarded compare-and-set: only succeeds if the lobby is still open and un-joined, so two
+// simultaneous joiners can't both win the race. Callers must check `changes` on the result.
+function joinCoinflipLobby(id, joinerId, joinerName) {
+  const stmt = db.prepare(
+    "UPDATE coinflip_lobbies SET joiner_user_id = ?, joiner_name = ? WHERE id = ? AND status = 'open' AND joiner_user_id IS NULL"
+  );
+  return stmt.run(joinerId, joinerName, id);
+}
+
+function resolveCoinflipLobby(id, resultSide, winnerId) {
+  db.prepare(
+    "UPDATE coinflip_lobbies SET status = 'resolved', result_side = ?, winner_user_id = ?, resolved_at = ? WHERE id = ?"
+  ).run(resultSide, winnerId, Date.now(), id);
+}
+
+function cancelCoinflipLobby(id) {
+  db.prepare("UPDATE coinflip_lobbies SET status = 'cancelled', resolved_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+// Multiplayer casino tables: table lifecycle (blackjack + roulette) lives in real shared rows so
+// up to 5 seated players' browsers, each polling independently, see the same authoritative seat
+// list, countdown deadline, and dealer/wheel state.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS casino_tables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    round_ends_at INTEGER,
+    dealer_cards_json TEXT,
+    roulette_result INTEGER,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+// A child table (not JSON-in-row) so each of up to 5 seats can be updated independently without a
+// read-modify-write race on a single shared blob.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS casino_table_seats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_id INTEGER NOT NULL,
+    seat_index INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    player_name TEXT NOT NULL,
+    bet REAL NOT NULL DEFAULT 0,
+    bj_cards_json TEXT,
+    bj_phase TEXT,
+    roulette_bets_json TEXT,
+    left_table INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(table_id, seat_index)
+  );
+`);
+
+function createCasinoTable(game) {
+  const stmt = db.prepare('INSERT INTO casino_tables (game, phase, created_at) VALUES (?, ?, ?)');
+  const info = stmt.run(game, 'waiting', Date.now());
+  return info.lastInsertRowid;
+}
+
+function getCasinoTableById(id) {
+  return db.prepare('SELECT * FROM casino_tables WHERE id = ?').get(id);
+}
+
+// Finds a table with the given game that still has room, preferring the most recently created one.
+function getOpenCasinoTable(game) {
+  const candidates = db
+    .prepare("SELECT * FROM casino_tables WHERE game = ? AND phase IN ('waiting', 'countdown') ORDER BY created_at DESC")
+    .all(game);
+  for (const table of candidates) {
+    const activeSeats = db
+      .prepare('SELECT COUNT(*) AS c FROM casino_table_seats WHERE table_id = ? AND left_table = 0')
+      .get(table.id).c;
+    if (activeSeats < 5) return table;
+  }
+  return null;
+}
+
+function updateCasinoTable(id, fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const setClause = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  db.prepare(`UPDATE casino_tables SET ${setClause} WHERE id = ?`).run(...values, id);
+}
+
+function getSeatsForTable(tableId) {
+  return db
+    .prepare('SELECT * FROM casino_table_seats WHERE table_id = ? AND left_table = 0 ORDER BY seat_index ASC')
+    .all(tableId);
+}
+
+// Takes the lowest free seat index (0-4) for this user at this table, inside a transaction so a
+// 6th simultaneous joiner can't slip past the 5-seat cap.
+const takeSeatTxn = db.transaction((tableId, userId, playerName) => {
+  const taken = db
+    .prepare('SELECT seat_index FROM casino_table_seats WHERE table_id = ? AND left_table = 0')
+    .all(tableId)
+    .map((r) => r.seat_index);
+  if (taken.length >= 5) return null;
+  let seatIndex = 0;
+  while (taken.includes(seatIndex)) seatIndex += 1;
+  const info = db
+    .prepare(
+      'INSERT INTO casino_table_seats (table_id, seat_index, user_id, player_name, bet) VALUES (?, ?, ?, ?, 0)'
+    )
+    .run(tableId, seatIndex, userId, playerName);
+  return info.lastInsertRowid;
+});
+
+function takeSeat(tableId, userId, playerName) {
+  return takeSeatTxn(tableId, userId, playerName);
+}
+
+function getSeatForUser(tableId, userId) {
+  return db
+    .prepare('SELECT * FROM casino_table_seats WHERE table_id = ? AND user_id = ? AND left_table = 0')
+    .get(tableId, userId);
+}
+
+function updateSeat(id, fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const setClause = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  db.prepare(`UPDATE casino_table_seats SET ${setClause} WHERE id = ?`).run(...values, id);
+}
+
+function leaveSeat(id) {
+  db.prepare('UPDATE casino_table_seats SET left_table = 1 WHERE id = ?').run(id);
+}
+
+function deleteCasinoTableIfEmpty(tableId) {
+  const remaining = db
+    .prepare('SELECT COUNT(*) AS c FROM casino_table_seats WHERE table_id = ? AND left_table = 0')
+    .get(tableId).c;
+  if (remaining === 0) {
+    db.prepare('DELETE FROM casino_table_seats WHERE table_id = ?').run(tableId);
+    db.prepare('DELETE FROM casino_tables WHERE id = ?').run(tableId);
+  }
+}
+
 module.exports = {
   db,
   createUser,
@@ -207,4 +465,29 @@ module.exports = {
   setServerModifier,
   createChatMessage,
   getRecentChatMessages,
+  touchMilosPresence,
+  clearMilosPresence,
+  getMilosOnlineUsers,
+  createDuelChallenge,
+  getDuelById,
+  getPendingDuelForTarget,
+  getActiveDuelForUser,
+  getPendingOrActiveDuelForUser,
+  updateDuel,
+  createCoinflipLobby,
+  getOpenCoinflipLobbies,
+  getCoinflipLobbyById,
+  joinCoinflipLobby,
+  resolveCoinflipLobby,
+  cancelCoinflipLobby,
+  createCasinoTable,
+  getCasinoTableById,
+  getOpenCasinoTable,
+  updateCasinoTable,
+  getSeatsForTable,
+  takeSeat,
+  getSeatForUser,
+  updateSeat,
+  leaveSeat,
+  deleteCasinoTableIfEmpty,
 };

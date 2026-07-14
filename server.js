@@ -26,8 +26,33 @@ const {
   setServerModifier,
   createChatMessage,
   getRecentChatMessages,
+  touchMilosPresence,
+  clearMilosPresence,
+  getMilosOnlineUsers,
+  createDuelChallenge,
+  getDuelById,
+  getPendingDuelForTarget,
+  getActiveDuelForUser,
+  getPendingOrActiveDuelForUser,
+  updateDuel,
+  createCoinflipLobby,
+  getOpenCoinflipLobbies,
+  getCoinflipLobbyById,
+  joinCoinflipLobby,
+  resolveCoinflipLobby,
+  cancelCoinflipLobby,
+  createCasinoTable,
+  getCasinoTableById,
+  getOpenCasinoTable,
+  updateCasinoTable,
+  getSeatsForTable,
+  takeSeat,
+  getSeatForUser,
+  updateSeat,
+  leaveSeat,
+  deleteCasinoTableIfEmpty,
 } = require('./db');
-const { hashPassword, checkPassword, issueToken, requireAuth } = require('./auth');
+const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
   newCharacter,
   doWork,
@@ -44,6 +69,12 @@ const {
   doBjHit,
   doBjStand,
   doSlotSpin,
+  drawCard,
+  handTotal,
+  isBlackjack,
+  computeTableBlackjackPayout,
+  spinRoulette,
+  evaluateRouletteBet,
   doBankDeposit,
   doBankWithdraw,
   doBankUpgrade,
@@ -65,9 +96,13 @@ const {
   doBuyFromDealer,
   doSellDrugs,
   doRobbery,
+  doRobPlayer,
   doStartFight,
   doCombatAction,
   doFlee,
+  initDuelCombatants,
+  resolveDuelTurn,
+  applyDuelOutcome,
   doAttemptCrime,
   doCommunityService,
   doHireLawyer,
@@ -94,6 +129,11 @@ const PORT = process.env.PORT || 3000;
 // requireAuth updates last_seen on every call, and the client polls /players/online well inside
 // this window, so anyone with the app open stays lit up here.
 const ONLINE_WINDOW_MS = 60 * 1000;
+
+// Players Online is scoped to New Milos City specifically -- the client sends a heartbeat every
+// 10s while that tab is active, so 20s (2 missed beats) is a safe backstop for a dropped poll
+// without keeping someone lit up long after they've actually left the room.
+const MILOS_ONLINE_WINDOW_MS = 20 * 1000;
 
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
@@ -163,7 +203,7 @@ app.post('/character/reset', requireAuth, (req, res) => {
 });
 
 app.get('/players/online', requireAuth, (req, res) => {
-  const rows = getOnlineUsers(Date.now() - ONLINE_WINDOW_MS);
+  const rows = getMilosOnlineUsers(Date.now() - MILOS_ONLINE_WINDOW_MS);
   // Send the full character so the client can compute the same title/rank badge it
   // shows for you, instead of duplicating that display logic server-side.
   const players = rows.map((row) => ({
@@ -171,7 +211,366 @@ app.get('/players/online', requireAuth, (req, res) => {
     character: JSON.parse(row.character_json),
     you: row.username === req.user.username,
   }));
-  res.json({ ok: true, players });
+
+  // Piggyback pending duel-challenge notification on this same poll rather than adding a second
+  // one -- the client already hits this endpoint every 15s while in Milos.
+  const pending = getPendingDuelForTarget(req.user.sub);
+  const pendingDuelChallenge = pending ? { id: pending.id, attackerName: pending.attacker_name } : null;
+
+  res.json({ ok: true, players, pendingDuelChallenge });
+});
+
+// New Milos City presence. Separate from last_seen (which just means "the app is open,
+// somewhere") -- these two routes are the actual signal for "looking at this tab right now".
+app.post('/milos/enter', requireAuth, (req, res) => {
+  touchMilosPresence(req.user.sub);
+  res.json({ ok: true });
+});
+
+// Also reachable via navigator.sendBeacon on tab close/refresh, which can't set an Authorization
+// header -- so this route accepts the token in the body as a fallback and verifies it manually,
+// same trust level as requireAuth, just a different transport.
+app.post('/milos/leave', (req, res) => {
+  const header = req.headers.authorization || '';
+  const headerToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = headerToken || (req.body && req.body.token);
+  const payload = token ? verifyToken(token) : null;
+  if (!payload) return res.status(401).json({ ok: false, reason: 'Invalid or expired token.' });
+
+  clearMilosPresence(payload.sub);
+  res.json({ ok: true });
+});
+
+app.post('/players/pay', requireAuth, (req, res) => {
+  const { targetUsername, amount } = req.body || {};
+  if (!(amount > 0)) return res.status(429).json({ ok: false, reason: 'Enter a valid amount.' });
+
+  const target = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!target) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (target.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't pay yourself." });
+
+  const payerUser = getUserById(req.user.sub);
+  if (!payerUser) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const payerCharacter = JSON.parse(payerUser.character_json);
+  if (payerCharacter.cash < amount) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  payerCharacter.cash = round2(payerCharacter.cash - amount);
+  saveCharacter(payerUser.id, payerCharacter);
+
+  const targetCharacter = JSON.parse(target.character_json);
+  targetCharacter.cash = round2(targetCharacter.cash + amount);
+  saveCharacter(target.id, targetCharacter);
+
+  res.json({
+    ok: true,
+    message: `Paid $${amount.toFixed(2)} to ${targetCharacter.firstName} ${targetCharacter.lastName}.`,
+    cls: 'gain',
+    character: payerCharacter,
+  });
+});
+
+app.post('/players/rob', requireAuth, (req, res) => {
+  const { targetUsername } = req.body || {};
+  const targetUser = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!targetUser) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (targetUser.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't rob yourself." });
+
+  const attackerUser = getUserById(req.user.sub);
+  if (!attackerUser) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+
+  const result = doRobPlayer(attackerCharacter, targetCharacter, targetUser.id, getServerState().modifier);
+  if (!result.ok) return res.status(429).json(result);
+
+  saveCharacter(attackerUser.id, attackerCharacter);
+  saveCharacter(targetUser.id, targetCharacter);
+
+  res.json({ ok: true, jailed: result.jailed, message: result.message, cls: result.cls, character: attackerCharacter });
+});
+
+function serializeCoinflipLobby(row) {
+  return {
+    id: row.id,
+    creatorName: row.creator_name,
+    joinerName: row.joiner_name,
+    wager: row.wager,
+    creatorSide: row.creator_side,
+    status: row.status,
+    resultSide: row.result_side,
+    createdAt: row.created_at,
+  };
+}
+
+app.post('/coinflip/create', requireAuth, (req, res) => {
+  const { wager, side } = req.body || {};
+  if (!(wager > 0)) return res.status(429).json({ ok: false, reason: 'Enter a valid wager.' });
+  if (side !== 'heads' && side !== 'tails') return res.status(400).json({ ok: false, reason: 'Pick heads or tails.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (character.cash < wager) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  character.cash = round2(character.cash - wager);
+  saveCharacter(user.id, character);
+  const lobbyId = createCoinflipLobby(user.id, `${character.firstName} ${character.lastName}`, round2(wager), side);
+
+  res.json({ ok: true, character, lobbyId, lobbies: getOpenCoinflipLobbies().map(serializeCoinflipLobby) });
+});
+
+app.get('/coinflip/lobbies', requireAuth, (req, res) => {
+  res.json({ ok: true, lobbies: getOpenCoinflipLobbies().map(serializeCoinflipLobby) });
+});
+
+app.post('/coinflip/join', requireAuth, (req, res) => {
+  const { lobbyId } = req.body || {};
+  const lobby = getCoinflipLobbyById(lobbyId);
+  if (!lobby || lobby.status !== 'open') return res.status(409).json({ ok: false, reason: 'That lobby is no longer available.' });
+  if (lobby.creator_user_id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't join your own lobby." });
+
+  const joinerUser = getUserById(req.user.sub);
+  if (!joinerUser) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const joinerCharacter = JSON.parse(joinerUser.character_json);
+  if (joinerCharacter.cash < lobby.wager) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  // Escrow the joiner's wager, then attempt the guarded claim. If someone else already claimed it
+  // (or the creator cancelled) in the meantime, `changes` will be 0 and we refund immediately.
+  joinerCharacter.cash = round2(joinerCharacter.cash - lobby.wager);
+  saveCharacter(joinerUser.id, joinerCharacter);
+
+  const claim = joinCoinflipLobby(lobby.id, joinerUser.id, `${joinerCharacter.firstName} ${joinerCharacter.lastName}`);
+  if (claim.changes === 0) {
+    joinerCharacter.cash = round2(joinerCharacter.cash + lobby.wager);
+    saveCharacter(joinerUser.id, joinerCharacter);
+    return res.status(409).json({ ok: false, reason: 'That lobby is no longer available.', character: joinerCharacter });
+  }
+
+  const resultSide = Math.random() < 0.5 ? 'heads' : 'tails';
+  const winnerIsCreator = resultSide === lobby.creator_side;
+  const winnerUserId = winnerIsCreator ? lobby.creator_user_id : joinerUser.id;
+  const pot = round2(lobby.wager * 2);
+
+  if (winnerIsCreator) {
+    const creatorUser = getUserById(lobby.creator_user_id);
+    if (creatorUser) {
+      const creatorCharacter = JSON.parse(creatorUser.character_json);
+      creatorCharacter.cash = round2(creatorCharacter.cash + pot);
+      saveCharacter(creatorUser.id, creatorCharacter);
+    }
+  } else {
+    joinerCharacter.cash = round2(joinerCharacter.cash + pot);
+    saveCharacter(joinerUser.id, joinerCharacter);
+  }
+
+  resolveCoinflipLobby(lobby.id, resultSide, winnerUserId);
+
+  res.json({
+    ok: true,
+    character: joinerCharacter,
+    lobby: serializeCoinflipLobby(getCoinflipLobbyById(lobby.id)),
+    lobbies: getOpenCoinflipLobbies().map(serializeCoinflipLobby),
+  });
+});
+
+app.post('/coinflip/cancel', requireAuth, (req, res) => {
+  const { lobbyId } = req.body || {};
+  const lobby = getCoinflipLobbyById(lobbyId);
+  if (!lobby || lobby.status !== 'open') return res.status(409).json({ ok: false, reason: 'That lobby is no longer available.' });
+  if (lobby.creator_user_id !== req.user.sub) return res.status(403).json({ ok: false, reason: 'You can only cancel your own lobby.' });
+
+  const user = getUserById(lobby.creator_user_id);
+  const character = JSON.parse(user.character_json);
+  character.cash = round2(character.cash + lobby.wager);
+  saveCharacter(user.id, character);
+  cancelCoinflipLobby(lobby.id);
+
+  res.json({ ok: true, character, lobbies: getOpenCoinflipLobbies().map(serializeCoinflipLobby) });
+});
+
+// PvP duels. State lives entirely in the `duels` row (not either player's character_json) since
+// turns arrive as two separate players' independent requests, not one round trip like PvE combat.
+const DUEL_TURN_TIMEOUT_MS = 45 * 1000;
+
+function serializeDuel(row) {
+  return {
+    id: row.id,
+    attackerUserId: row.attacker_user_id,
+    attackerName: row.attacker_name,
+    targetUserId: row.target_user_id,
+    targetName: row.target_name,
+    status: row.status,
+    turnUserId: row.turn_user_id,
+    attackerHp: row.attacker_hp,
+    attackerMaxHp: row.attacker_max_hp,
+    targetHp: row.target_hp,
+    targetMaxHp: row.target_max_hp,
+    winnerUserId: row.winner_user_id,
+  };
+}
+
+function finishDuel(duel, winnerUserId) {
+  const attackerUser = getUserById(duel.attacker_user_id);
+  const targetUser = getUserById(duel.target_user_id);
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  const winnerIsAttacker = winnerUserId === duel.attacker_user_id;
+  const winnerCharacter = winnerIsAttacker ? attackerCharacter : targetCharacter;
+  const loserCharacter = winnerIsAttacker ? targetCharacter : attackerCharacter;
+
+  applyDuelOutcome(winnerCharacter, loserCharacter);
+  saveCharacter(attackerUser.id, attackerCharacter);
+  saveCharacter(targetUser.id, targetCharacter);
+  updateDuel(duel.id, { status: 'finished', winner_user_id: winnerUserId, last_action_at: Date.now() });
+  return getDuelById(duel.id);
+}
+
+// Auto-forfeits whoever's turn timed out. Called at the top of every duel route (poll or action)
+// so an abandoned duel can't block the other player forever -- no cron, just a timestamp check.
+function checkDuelTimeout(duel) {
+  if (duel.status !== 'active' || Date.now() - duel.last_action_at <= DUEL_TURN_TIMEOUT_MS) return duel;
+  const winnerUserId = duel.turn_user_id === duel.attacker_user_id ? duel.target_user_id : duel.attacker_user_id;
+  return finishDuel(duel, winnerUserId);
+}
+
+app.post('/duels/challenge', requireAuth, (req, res) => {
+  const { targetUsername } = req.body || {};
+  const targetUser = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!targetUser) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (targetUser.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't duel yourself." });
+
+  if (getPendingOrActiveDuelForUser(req.user.sub)) {
+    return res.status(429).json({ ok: false, reason: 'You already have a duel pending or in progress.' });
+  }
+  if (getPendingOrActiveDuelForUser(targetUser.id)) {
+    return res.status(429).json({ ok: false, reason: 'That player already has a duel pending or in progress.' });
+  }
+
+  const attackerUser = getUserById(req.user.sub);
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  if (attackerCharacter.jail.inJail) return res.status(429).json({ ok: false, reason: "You can't duel from jail." });
+  if (targetCharacter.jail.inJail) return res.status(429).json({ ok: false, reason: 'That player is in jail.' });
+
+  const duelId = createDuelChallenge(
+    attackerUser.id,
+    `${attackerCharacter.firstName} ${attackerCharacter.lastName}`,
+    targetUser.id,
+    `${targetCharacter.firstName} ${targetCharacter.lastName}`
+  );
+  res.json({ ok: true, duelId });
+});
+
+app.post('/duels/respond', requireAuth, (req, res) => {
+  const { duelId, accept } = req.body || {};
+  const duel = getDuelById(duelId);
+  if (!duel) return res.status(404).json({ ok: false, reason: 'Duel not found.' });
+  if (duel.target_user_id !== req.user.sub) return res.status(403).json({ ok: false, reason: 'This challenge is not yours to answer.' });
+  if (duel.status !== 'pending') return res.status(429).json({ ok: false, reason: 'This challenge is no longer pending.' });
+
+  if (!accept) {
+    updateDuel(duel.id, { status: 'declined' });
+    return res.json({ ok: true, duel: serializeDuel(getDuelById(duel.id)) });
+  }
+
+  const attackerUser = getUserById(duel.attacker_user_id);
+  const targetUser = getUserById(duel.target_user_id);
+  if (!attackerUser || !targetUser) return res.status(404).json({ ok: false, reason: 'A participant no longer exists.' });
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  const combatants = initDuelCombatants(attackerCharacter, targetCharacter);
+
+  updateDuel(duel.id, {
+    status: 'active',
+    turn_user_id: duel.attacker_user_id,
+    attacker_hp: combatants.attackerHp,
+    attacker_max_hp: combatants.attackerMaxHp,
+    target_hp: combatants.targetHp,
+    target_max_hp: combatants.targetMaxHp,
+    last_action_at: Date.now(),
+  });
+
+  res.json({ ok: true, duel: serializeDuel(getDuelById(duel.id)) });
+});
+
+app.post('/duels/action', requireAuth, (req, res) => {
+  const { duelId, action } = req.body || {};
+  let duel = getDuelById(duelId);
+  if (!duel) return res.status(404).json({ ok: false, reason: 'Duel not found.' });
+  if (duel.attacker_user_id !== req.user.sub && duel.target_user_id !== req.user.sub) {
+    return res.status(403).json({ ok: false, reason: 'Not your duel.' });
+  }
+
+  duel = checkDuelTimeout(duel);
+  if (duel.status !== 'active') return res.json({ ok: true, duel: serializeDuel(duel) });
+  if (duel.turn_user_id !== req.user.sub) return res.status(403).json({ ok: false, reason: "It's not your turn." });
+
+  const actorSide = duel.attacker_user_id === req.user.sub ? 'attacker' : 'target';
+  const opponentSide = actorSide === 'attacker' ? 'target' : 'attacker';
+  const attackerUser = getUserById(duel.attacker_user_id);
+  const targetUser = getUserById(duel.target_user_id);
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  const actor = actorSide === 'attacker' ? attackerCharacter : targetCharacter;
+  const opponent = actorSide === 'attacker' ? targetCharacter : attackerCharacter;
+
+  const state = {
+    attackerHp: duel.attacker_hp,
+    targetHp: duel.target_hp,
+    attackerGuarding: !!duel.attacker_guarding,
+    targetGuarding: !!duel.target_guarding,
+  };
+
+  const result = resolveDuelTurn(state, actor, opponent, actorSide, action);
+  if (!result.ok) return res.status(429).json(result);
+
+  if (result.opponentDefeated) {
+    updateDuel(duel.id, {
+      attacker_hp: state.attackerHp,
+      target_hp: state.targetHp,
+      attacker_guarding: state.attackerGuarding ? 1 : 0,
+      target_guarding: state.targetGuarding ? 1 : 0,
+    });
+    const winnerUserId = actorSide === 'attacker' ? duel.attacker_user_id : duel.target_user_id;
+    const finished = finishDuel(getDuelById(duel.id), winnerUserId);
+    return res.json({ ok: true, result, duel: serializeDuel(finished) });
+  }
+
+  const nextTurnUserId = opponentSide === 'attacker' ? duel.attacker_user_id : duel.target_user_id;
+  updateDuel(duel.id, {
+    attacker_hp: state.attackerHp,
+    target_hp: state.targetHp,
+    attacker_guarding: state.attackerGuarding ? 1 : 0,
+    target_guarding: state.targetGuarding ? 1 : 0,
+    turn_user_id: nextTurnUserId,
+    last_action_at: Date.now(),
+  });
+
+  res.json({ ok: true, result, duel: serializeDuel(getDuelById(duel.id)) });
+});
+
+app.post('/duels/forfeit', requireAuth, (req, res) => {
+  const { duelId } = req.body || {};
+  const duel = getDuelById(duelId);
+  if (!duel) return res.status(404).json({ ok: false, reason: 'Duel not found.' });
+  if (duel.attacker_user_id !== req.user.sub && duel.target_user_id !== req.user.sub) {
+    return res.status(403).json({ ok: false, reason: 'Not your duel.' });
+  }
+  if (duel.status !== 'active') return res.json({ ok: true, duel: serializeDuel(duel) });
+
+  const winnerUserId = duel.attacker_user_id === req.user.sub ? duel.target_user_id : duel.attacker_user_id;
+  const finished = finishDuel(duel, winnerUserId);
+  res.json({ ok: true, duel: serializeDuel(finished) });
+});
+
+app.get('/duels/:id', requireAuth, (req, res) => {
+  let duel = getDuelById(Number(req.params.id));
+  if (!duel) return res.status(404).json({ ok: false, reason: 'Duel not found.' });
+  if (duel.attacker_user_id !== req.user.sub && duel.target_user_id !== req.user.sub) {
+    return res.status(403).json({ ok: false, reason: 'Not your duel.' });
+  }
+  duel = checkDuelTimeout(duel);
+  res.json({ ok: true, duel: serializeDuel(duel) });
 });
 
 // Trust-based sync for everything that isn't server-authoritative yet (equipping titles/gear,
@@ -636,6 +1035,287 @@ app.post('/chat/send', requireAuth, (req, res) => {
 
   createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN));
   res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
+});
+
+// ---------- Multiplayer casino tables (Blackjack + Roulette) ----------
+// Table lifecycle lives in casino_tables/casino_table_seats (shared rows), not character_json --
+// up to 5 seated players' browsers, each polling independently, need the same authoritative seat
+// list, countdown deadline, and dealer/wheel state. Every route checks the deadline first (same
+// check-on-poll idiom as duel timeouts) and advances the round if it's passed -- no cron.
+const TABLE_COUNTDOWN_MS = 30 * 1000;
+const TABLE_ROUND_TIMEOUT_MS = 30 * 1000;
+
+function serializeCasinoTable(table, seats) {
+  return {
+    id: table.id,
+    game: table.game,
+    phase: table.phase,
+    roundEndsAt: table.round_ends_at,
+    dealerCards: table.dealer_cards_json ? JSON.parse(table.dealer_cards_json) : [],
+    rouletteResult: table.roulette_result,
+    seats: seats.map((s) => ({
+      seatIndex: s.seat_index,
+      userId: s.user_id,
+      playerName: s.player_name,
+      bet: s.bet,
+      bjCards: s.bj_cards_json ? JSON.parse(s.bj_cards_json) : [],
+      bjPhase: s.bj_phase,
+      rouletteBets: s.roulette_bets_json ? JSON.parse(s.roulette_bets_json) : [],
+    })),
+  };
+}
+
+function resolveBlackjackTableRound(table, seats) {
+  const dealerCards = JSON.parse(table.dealer_cards_json);
+  // Dealer draws to 17 exactly once, shared by every seated hand -- unless every bettor already
+  // busted, in which case there's nothing left to settle against and drawing further is pointless.
+  const anyoneStillIn = seats.some((s) => s.bet > 0 && handTotal(JSON.parse(s.bj_cards_json)) <= 21);
+  if (anyoneStillIn) {
+    while (handTotal(dealerCards) < 17) dealerCards.push(drawCard());
+  }
+  const outcomes = [];
+  seats.filter((s) => s.bet > 0).forEach((seat) => {
+    const cards = JSON.parse(seat.bj_cards_json);
+    const { payout, message } = computeTableBlackjackPayout(cards, dealerCards, seat.bet);
+    const user = getUserById(seat.user_id);
+    if (user) {
+      const character = JSON.parse(user.character_json);
+      character.chips += payout;
+      saveCharacter(user.id, character);
+    }
+    outcomes.push({ userId: seat.user_id, playerName: seat.player_name, payout, message });
+    updateSeat(seat.id, { bet: 0, bj_cards_json: null, bj_phase: null });
+  });
+  updateCasinoTable(table.id, {
+    phase: 'countdown',
+    round_ends_at: Date.now() + TABLE_COUNTDOWN_MS,
+    dealer_cards_json: null,
+  });
+  return { dealerCards, outcomes };
+}
+
+function resolveRouletteTableRound(table, seats) {
+  const resultNumber = spinRoulette();
+  const outcomes = [];
+  seats.filter((s) => s.roulette_bets_json).forEach((seat) => {
+    const bets = JSON.parse(seat.roulette_bets_json);
+    const totalPayout = bets.reduce((sum, bet) => sum + evaluateRouletteBet(bet, resultNumber), 0);
+    const user = getUserById(seat.user_id);
+    if (user && totalPayout > 0) {
+      const character = JSON.parse(user.character_json);
+      character.chips += totalPayout;
+      saveCharacter(user.id, character);
+    }
+    outcomes.push({ userId: seat.user_id, playerName: seat.player_name, payout: totalPayout });
+    updateSeat(seat.id, { roulette_bets_json: null });
+  });
+  updateCasinoTable(table.id, {
+    phase: 'countdown',
+    round_ends_at: Date.now() + TABLE_COUNTDOWN_MS,
+    roulette_result: resultNumber,
+  });
+  return { resultNumber, outcomes };
+}
+
+// Deals every seat that placed a bet, plus the dealer -- natural blackjacks (either side) lock
+// that seat immediately, same rule as the single-player version.
+function startBlackjackRound(table, seats) {
+  const dealerCards = [drawCard(), drawCard()];
+  const dealerBJ = isBlackjack(dealerCards);
+  const bettingSeats = seats.filter((s) => s.bet > 0);
+
+  if (bettingSeats.length === 0) {
+    updateCasinoTable(table.id, { phase: 'countdown', round_ends_at: Date.now() + TABLE_COUNTDOWN_MS });
+    return;
+  }
+
+  bettingSeats.forEach((seat) => {
+    const cards = [drawCard(), drawCard()];
+    const phase = dealerBJ || isBlackjack(cards) ? 'done' : 'playerTurn';
+    updateSeat(seat.id, { bj_cards_json: JSON.stringify(cards), bj_phase: phase });
+  });
+
+  updateCasinoTable(table.id, {
+    phase: 'in_round',
+    dealer_cards_json: JSON.stringify(dealerCards),
+    round_ends_at: Date.now() + TABLE_ROUND_TIMEOUT_MS,
+  });
+}
+
+// Auto-stands any seat still mid-hand once the round timer runs out, so one AFK player can't
+// stall the table forever, then resolves. Called only when the deadline has actually passed.
+function forceResolveStalledBlackjackRound(table, seats) {
+  seats.filter((s) => s.bet > 0 && s.bj_phase === 'playerTurn').forEach((seat) => {
+    updateSeat(seat.id, { bj_phase: 'done' });
+  });
+  return resolveBlackjackTableRound(table, getSeatsForTable(table.id));
+}
+
+// The single check-on-poll entry point: advances countdown -> round-start, and (for blackjack)
+// resolves a round once every seat is done or the round timer has lapsed. `lastRoundResult` is
+// only set the moment a round resolves, so the client can show the final hand/payout once even
+// though the table itself has already reset to a fresh countdown for the next round.
+function advanceCasinoTableIfDue(table) {
+  const seats = getSeatsForTable(table.id);
+
+  if (table.phase === 'countdown' && Date.now() >= table.round_ends_at) {
+    let lastRoundResult = null;
+    if (table.game === 'blackjack') startBlackjackRound(table, seats);
+    else lastRoundResult = { roulette: resolveRouletteTableRound(table, seats) };
+    return { table: getCasinoTableById(table.id), seats: getSeatsForTable(table.id), lastRoundResult };
+  }
+
+  if (table.game === 'blackjack' && table.phase === 'in_round') {
+    const bettingSeats = seats.filter((s) => s.bet > 0);
+    const allDone = bettingSeats.length > 0 && bettingSeats.every((s) => s.bj_phase === 'done');
+    if (allDone) {
+      const result = resolveBlackjackTableRound(table, seats);
+      return { table: getCasinoTableById(table.id), seats: getSeatsForTable(table.id), lastRoundResult: { blackjack: result } };
+    }
+    if (Date.now() >= table.round_ends_at) {
+      const result = forceResolveStalledBlackjackRound(table, seats);
+      return { table: getCasinoTableById(table.id), seats: getSeatsForTable(table.id), lastRoundResult: { blackjack: result } };
+    }
+  }
+
+  return { table, seats, lastRoundResult: null };
+}
+
+app.post('/casino/table/join', requireAuth, (req, res) => {
+  const { game } = req.body || {};
+  if (game !== 'blackjack' && game !== 'roulette') return res.status(400).json({ ok: false, reason: 'Unknown table game.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+
+  let table = getOpenCasinoTable(game);
+  if (!table) {
+    const tableId = createCasinoTable(game);
+    table = getCasinoTableById(tableId);
+  }
+
+  const existingSeat = getSeatForUser(table.id, user.id);
+  if (!existingSeat) {
+    const seatId = takeSeat(table.id, user.id, `${character.firstName} ${character.lastName}`);
+    if (seatId === null) return res.status(409).json({ ok: false, reason: 'That table just filled up. Try again.' });
+    if (table.phase === 'waiting') {
+      updateCasinoTable(table.id, { phase: 'countdown', round_ends_at: Date.now() + TABLE_COUNTDOWN_MS });
+    }
+  }
+
+  const advanced = advanceCasinoTableIfDue(getCasinoTableById(table.id));
+  res.json({ ok: true, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
+});
+
+app.post('/casino/table/leave', requireAuth, (req, res) => {
+  const { tableId } = req.body || {};
+  const table = getCasinoTableById(tableId);
+  if (!table) return res.status(404).json({ ok: false, reason: 'Table not found.' });
+  const seat = getSeatForUser(table.id, req.user.sub);
+  if (seat) leaveSeat(seat.id);
+  deleteCasinoTableIfEmpty(table.id);
+  res.json({ ok: true });
+});
+
+app.get('/casino/table/:id', requireAuth, (req, res) => {
+  const table = getCasinoTableById(Number(req.params.id));
+  if (!table) return res.status(404).json({ ok: false, reason: 'Table not found.' });
+  const advanced = advanceCasinoTableIfDue(table);
+  res.json({ ok: true, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
+});
+
+app.post('/casino/table/blackjack/bet', requireAuth, (req, res) => {
+  const { tableId, bet } = req.body || {};
+  if (!(bet > 0)) return res.status(429).json({ ok: false, reason: 'Enter a valid bet.' });
+  let table = getCasinoTableById(tableId);
+  if (!table || table.game !== 'blackjack') return res.status(404).json({ ok: false, reason: 'Table not found.' });
+
+  table = advanceCasinoTableIfDue(table).table;
+  if (table.phase !== 'countdown') return res.status(429).json({ ok: false, reason: 'Betting is closed for this round.' });
+
+  const seat = getSeatForUser(table.id, req.user.sub);
+  if (!seat) return res.status(404).json({ ok: false, reason: 'You are not seated at this table.' });
+  if (seat.bet > 0) return res.status(429).json({ ok: false, reason: 'You already placed a bet this round.' });
+
+  const user = getUserById(req.user.sub);
+  const character = JSON.parse(user.character_json);
+  if (character.chips < bet) return res.status(429).json({ ok: false, reason: 'Not enough Chips.' });
+
+  character.chips -= bet;
+  saveCharacter(user.id, character);
+  updateSeat(seat.id, { bet });
+
+  const advanced = advanceCasinoTableIfDue(getCasinoTableById(table.id));
+  res.json({ ok: true, character, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
+});
+
+app.post('/casino/table/blackjack/hit', requireAuth, (req, res) => {
+  const { tableId } = req.body || {};
+  let table = getCasinoTableById(tableId);
+  if (!table || table.game !== 'blackjack') return res.status(404).json({ ok: false, reason: 'Table not found.' });
+
+  table = advanceCasinoTableIfDue(table).table;
+  const seat = getSeatForUser(table.id, req.user.sub);
+  if (!seat) return res.status(404).json({ ok: false, reason: 'You are not seated at this table.' });
+  if (table.phase !== 'in_round' || seat.bj_phase !== 'playerTurn') {
+    return res.status(429).json({ ok: false, reason: 'No hand in progress.' });
+  }
+
+  const cards = JSON.parse(seat.bj_cards_json);
+  cards.push(drawCard());
+  const total = handTotal(cards);
+  const phase = total >= 21 ? 'done' : 'playerTurn';
+  updateSeat(seat.id, { bj_cards_json: JSON.stringify(cards), bj_phase: phase });
+
+  const advanced = advanceCasinoTableIfDue(getCasinoTableById(table.id));
+  res.json({ ok: true, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
+});
+
+app.post('/casino/table/blackjack/stand', requireAuth, (req, res) => {
+  const { tableId } = req.body || {};
+  let table = getCasinoTableById(tableId);
+  if (!table || table.game !== 'blackjack') return res.status(404).json({ ok: false, reason: 'Table not found.' });
+
+  table = advanceCasinoTableIfDue(table).table;
+  const seat = getSeatForUser(table.id, req.user.sub);
+  if (!seat) return res.status(404).json({ ok: false, reason: 'You are not seated at this table.' });
+  if (table.phase !== 'in_round' || seat.bj_phase !== 'playerTurn') {
+    return res.status(429).json({ ok: false, reason: 'No hand in progress.' });
+  }
+
+  updateSeat(seat.id, { bj_phase: 'done' });
+
+  const advanced = advanceCasinoTableIfDue(getCasinoTableById(table.id));
+  res.json({ ok: true, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
+});
+
+app.post('/casino/table/roulette/bet', requireAuth, (req, res) => {
+  const { tableId, bets } = req.body || {};
+  if (!Array.isArray(bets) || bets.length === 0) return res.status(429).json({ ok: false, reason: 'Place at least one bet.' });
+  let table = getCasinoTableById(tableId);
+  if (!table || table.game !== 'roulette') return res.status(404).json({ ok: false, reason: 'Table not found.' });
+
+  table = advanceCasinoTableIfDue(table).table;
+  if (table.phase !== 'countdown') return res.status(429).json({ ok: false, reason: 'Betting is closed for this round.' });
+
+  const seat = getSeatForUser(table.id, req.user.sub);
+  if (!seat) return res.status(404).json({ ok: false, reason: 'You are not seated at this table.' });
+  if (seat.roulette_bets_json) return res.status(429).json({ ok: false, reason: 'You already placed bets this round.' });
+
+  const total = bets.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+  if (!(total > 0)) return res.status(429).json({ ok: false, reason: 'Enter valid bet amounts.' });
+
+  const user = getUserById(req.user.sub);
+  const character = JSON.parse(user.character_json);
+  if (character.chips < total) return res.status(429).json({ ok: false, reason: 'Not enough Chips.' });
+
+  character.chips -= total;
+  saveCharacter(user.id, character);
+  updateSeat(seat.id, { roulette_bets_json: JSON.stringify(bets) });
+
+  const advanced = advanceCasinoTableIfDue(getCasinoTableById(table.id));
+  res.json({ ok: true, character, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
 });
 
 app.listen(PORT, () => {

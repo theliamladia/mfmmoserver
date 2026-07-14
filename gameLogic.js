@@ -593,6 +593,61 @@ function resolveBlackjack(character) {
   return { ok: true, message: `${msg} (bet ${bj.bet}, payout ${payout})`, cls, resolved: true, character };
 }
 
+// Multiplayer table blackjack reuses drawCard/handTotal/isBlackjack (already module-scope, not
+// character-specific) plus this standalone payout function -- unlike the single-player
+// resolveBlackjack, a bust has to be handled as a branch here instead of being intercepted at hit
+// time, since a table round's payout only happens once, together, after every seat is done.
+function computeTableBlackjackPayout(playerCards, dealerCards, bet) {
+  const playerTotal = handTotal(playerCards);
+  const dealerTotal = handTotal(dealerCards);
+  const playerBJ = isBlackjack(playerCards);
+  const dealerBJ = isBlackjack(dealerCards);
+
+  if (playerTotal > 21) return { payout: 0, message: `Busted with ${playerTotal}. You lose.` };
+  if (playerBJ && dealerBJ) return { payout: bet, message: 'Both blackjack! Push.' };
+  if (playerBJ) return { payout: Math.floor(bet * 2.5), message: 'Blackjack! You win 3:2.' };
+  if (dealerBJ) return { payout: 0, message: 'Dealer blackjack. You lose.' };
+  if (dealerTotal > 21) return { payout: bet * 2, message: `Dealer busts with ${dealerTotal}. You win!` };
+  if (playerTotal > dealerTotal) return { payout: bet * 2, message: `You win ${playerTotal} vs ${dealerTotal}.` };
+  if (playerTotal === dealerTotal) return { payout: bet, message: `Push at ${playerTotal}.` };
+  return { payout: 0, message: `Dealer wins ${dealerTotal} vs ${playerTotal}.` };
+}
+
+// ---------- Roulette (multiplayer tables only -- no single-player version existed before) ----------
+const ROULETTE_COLOR_BY_NUMBER = (() => {
+  const red = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+  const map = {};
+  for (let n = 0; n <= 36; n += 1) {
+    map[n] = n === 0 ? 'green' : red.has(n) ? 'red' : 'black';
+  }
+  return map;
+})();
+
+function spinRoulette() {
+  return randInt(0, 36);
+}
+
+// bet: { type: 'straight'|'redblack'|'evenodd'|'highlow', value: number|string, amount }
+function evaluateRouletteBet(bet, resultNumber) {
+  const color = ROULETTE_COLOR_BY_NUMBER[resultNumber];
+  if (bet.type === 'straight') {
+    return Number(bet.value) === resultNumber ? bet.amount * 36 : 0;
+  }
+  if (resultNumber === 0) return 0; // house number -- all even-money outside bets lose
+  if (bet.type === 'redblack') {
+    return bet.value === color ? bet.amount * 2 : 0;
+  }
+  if (bet.type === 'evenodd') {
+    const isEven = resultNumber % 2 === 0;
+    return (bet.value === 'even') === isEven ? bet.amount * 2 : 0;
+  }
+  if (bet.type === 'highlow') {
+    const isHigh = resultNumber >= 19;
+    return (bet.value === 'high') === isHigh ? bet.amount * 2 : 0;
+  }
+  return 0;
+}
+
 // Mirrors the client's doBjDeal() exactly, including the natural-blackjack auto-resolve.
 function doBjDeal(character, bet) {
   const bj = ensureBlackjackState(character);
@@ -1045,6 +1100,63 @@ function doRobbery(character, activeModifier) {
   return { ok: true, jailed: true, message: `They noticed, fought back, and beat you! Sentenced to ${ROBBERY_JAIL_YEARS} year.`, cls: 'loss', character };
 }
 
+// PvP robbery of a specific real target (as opposed to doRobbery's flavor-text "stranger"). Same
+// risk profile as the PvE version -- same odds math, same jail penalty on failure -- but the cash
+// actually moves between two real characters, and the cooldown is keyed to this specific
+// attacker-target pair so hitting someone doesn't lock you out of robbing anyone else.
+const PVP_ROBBERY_COOLDOWN_MS = 5 * 60 * 1000;
+
+function doRobPlayer(attacker, target, targetUserId, activeModifier) {
+  if (activeModifier === 'peace') return { ok: false, reason: 'Robbery is disabled -- Peace & Prosperity.' };
+
+  const cooldownKey = `rob_${targetUserId}`;
+  const remaining = getRemainingCooldown(attacker, cooldownKey, PVP_ROBBERY_COOLDOWN_MS);
+  if (remaining > 0) return { ok: false, reason: `You need to wait ${Math.ceil(remaining / 1000)}s before robbing them again.` };
+
+  attacker.cooldowns[cooldownKey] = Date.now();
+  const speed = attacker.stats.speed;
+  const looks = attacker.stats.looks;
+  const findOutChance = Math.max(0.1, Math.min(0.55, 0.55 - (speed / 100) * 0.35 - (looks / 100) * 0.10));
+
+  if (Math.random() >= findOutChance) {
+    const gain = Math.min(round2(randFloat(ROBBERY_MIN, ROBBERY_MAX)), target.cash);
+    attacker.cash = round2(attacker.cash + gain);
+    target.cash = round2(target.cash - gain);
+    attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
+    return { ok: true, jailed: false, message: `Robbed ${target.firstName} ${target.lastName} for $${gain.toFixed(2)} and got away clean.`, cls: 'gain', attacker, target };
+  }
+
+  const winChance = Math.max(0.15, Math.min(0.85, 0.5 + (attacker.stats.attack - target.stats.attack) * 0.015));
+  if (Math.random() < winChance) {
+    const gain = Math.min(round2(randFloat(ROBBERY_MIN, ROBBERY_MAX) * 0.5), target.cash);
+    attacker.cash = round2(attacker.cash + gain);
+    target.cash = round2(target.cash - gain);
+    attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
+    return {
+      ok: true,
+      jailed: false,
+      message: `${target.firstName} noticed and fought back! You won the scuffle and got away with $${gain.toFixed(2)}.`,
+      cls: 'gain',
+      attacker,
+      target,
+    };
+  }
+
+  attacker.alliance = clampStat(Math.max(attacker.alliance, GUZMAN_MIN_ALLIANCE));
+  attacker.jail.inJail = true;
+  attacker.jail.crime = 'Attempted Robbery';
+  attacker.jail.yearsRemaining = ROBBERY_JAIL_YEARS;
+  attacker.jail.serving = false;
+  return {
+    ok: true,
+    jailed: true,
+    message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${ROBBERY_JAIL_YEARS} year.`,
+    cls: 'loss',
+    attacker,
+    target,
+  };
+}
+
 // Minimal version of the client's getItemDef() -- only the fields Combat needs (atkBonus,
 // statBonuses), so only the item tables that carry those.
 function combatItemDef(itemId) {
@@ -1243,6 +1355,85 @@ function doFlee(character) {
   combat.turn = null;
   character.cooldowns.combat = Date.now();
   return { ok: true, character };
+}
+
+// ---------- PvP duels ----------
+// Reuses the same combat math as PvE (baseCombatAttack/combatDefense/equippedWeaponAtkBonus/
+// speedDodgeChance and the same hit-chance constants), but against a real opponent character
+// instead of an NPC entry, and against a `duels` row's hp/guarding fields instead of
+// character.combat -- duel state has to outlive a single request since turns alternate between
+// two separate players' requests.
+const DUEL_CASH_REWARD_MIN = 50;
+const DUEL_CASH_REWARD_MAX = 150;
+
+function initDuelCombatants(attackerCharacter, targetCharacter) {
+  const attackerMaxHp = attackerCharacter.stats.health + heightHpBonus(attackerCharacter) + gearStatBonus(attackerCharacter, 'health');
+  const targetMaxHp = targetCharacter.stats.health + heightHpBonus(targetCharacter) + gearStatBonus(targetCharacter, 'health');
+  return {
+    attackerHp: attackerMaxHp,
+    attackerMaxHp,
+    targetHp: targetMaxHp,
+    targetMaxHp,
+  };
+}
+
+// `state` is a plain object with attackerHp/targetHp/attackerGuarding/targetGuarding -- the
+// caller is responsible for loading it from (and persisting it back to) the duels row.
+function resolveDuelTurn(state, actor, opponent, actorSide, action) {
+  if (!['punch', 'heavy', 'guard', 'weapon'].includes(action)) return { ok: false, reason: 'Unknown action.' };
+
+  const opponentSide = actorSide === 'attacker' ? 'target' : 'attacker';
+  const actorGuardKey = actorSide === 'attacker' ? 'attackerGuarding' : 'targetGuarding';
+  const opponentGuardKey = opponentSide === 'attacker' ? 'attackerGuarding' : 'targetGuarding';
+  const opponentHpKey = opponentSide === 'attacker' ? 'attackerHp' : 'targetHp';
+
+  if (action === 'guard') {
+    state[actorGuardKey] = true;
+    if (Math.random() < GUARD_RIPOSTE_CHANCE) {
+      const base = baseCombatAttack(actor);
+      const dmg = Math.max(1, Math.round(base * 0.5 - combatDefense(opponent) * 0.4 + randInt(-2, 2)));
+      state[opponentHpKey] = Math.max(0, state[opponentHpKey] - dmg);
+      return { ok: true, action, dmg, missed: false, riposted: true, opponentDefeated: state[opponentHpKey] <= 0 };
+    }
+    return { ok: true, action, dmg: 0, missed: false, riposted: false, opponentDefeated: false };
+  }
+
+  // The defender's speed lets them dodge outright, mirroring the PvE model's chance for the
+  // player to dodge the enemy's attack -- here both sides get that chance on defense.
+  if (Math.random() < speedDodgeChance(opponent)) {
+    return { ok: true, action, dmg: 0, missed: false, dodged: true, opponentDefeated: false };
+  }
+
+  const base = baseCombatAttack(actor);
+  const weaponBonus = equippedWeaponAtkBonus(actor);
+  let dmg;
+  if (action === 'heavy') {
+    if (Math.random() < HEAVY_STRIKE_MISS_CHANCE) return { ok: true, action, dmg: 0, missed: true, opponentDefeated: false };
+    dmg = Math.max(1, Math.round(base * HEAVY_STRIKE_MULT + weaponBonus * 0.5 - combatDefense(opponent) * 0.4 + randInt(-3, 3)));
+  } else if (action === 'weapon') {
+    if (weaponBonus <= 0) return { ok: true, action, dmg: 0, missed: true, opponentDefeated: false };
+    if (Math.random() < WEAPON_ATTACK_JAM_CHANCE) return { ok: true, action, dmg: 0, missed: true, jammed: true, opponentDefeated: false };
+    dmg = Math.max(1, Math.round(base + weaponBonus * WEAPON_ATTACK_MULT - combatDefense(opponent) * 0.4 + randInt(-3, 3)));
+  } else {
+    dmg = Math.max(1, Math.round(base + weaponBonus * 0.5 - combatDefense(opponent) * 0.4 + randInt(-3, 3)));
+  }
+
+  if (state[opponentGuardKey]) {
+    dmg = Math.max(0, Math.round(dmg * (1 - GUARD_DAMAGE_REDUCTION)));
+    state[opponentGuardKey] = false;
+  }
+
+  state[opponentHpKey] = Math.max(0, state[opponentHpKey] - dmg);
+  return { ok: true, action, dmg, missed: false, opponentDefeated: state[opponentHpKey] <= 0 };
+}
+
+// Applies the flat cash prize from loser to winner once a duel ends, whether by knockout or
+// forfeit -- mutates both character objects, caller saves them.
+function applyDuelOutcome(winnerCharacter, loserCharacter) {
+  const reward = Math.min(loserCharacter.cash, randInt(DUEL_CASH_REWARD_MIN, DUEL_CASH_REWARD_MAX));
+  loserCharacter.cash = round2(loserCharacter.cash - reward);
+  winnerCharacter.cash = round2(winnerCharacter.cash + reward);
+  return reward;
 }
 
 // Mirrors the client's crimeFailChance() exactly.
@@ -1483,6 +1674,13 @@ module.exports = {
   doBjHit,
   doBjStand,
   doSlotSpin,
+  drawCard,
+  handTotal,
+  isBlackjack,
+  computeTableBlackjackPayout,
+  spinRoulette,
+  evaluateRouletteBet,
+  ROULETTE_COLOR_BY_NUMBER,
   doBankDeposit,
   doBankWithdraw,
   doBankUpgrade,
@@ -1504,9 +1702,13 @@ module.exports = {
   doBuyFromDealer,
   doSellDrugs,
   doRobbery,
+  doRobPlayer,
   doStartFight,
   doCombatAction,
   doFlee,
+  initDuelCombatants,
+  resolveDuelTurn,
+  applyDuelOutcome,
   doAttemptCrime,
   doCommunityService,
   doHireLawyer,

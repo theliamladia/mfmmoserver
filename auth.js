@@ -36,4 +36,14 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { hashPassword, checkPassword, issueToken, requireAuth };
+// Used only by routes that can't rely on a normal Authorization header -- e.g. navigator.sendBeacon,
+// which can't set custom headers, so the token has to travel in the beacon's body instead.
+function verifyToken(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { hashPassword, checkPassword, issueToken, requireAuth, verifyToken };
