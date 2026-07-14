@@ -24,6 +24,8 @@ const {
   getServerState,
   setServerPaused,
   setServerModifier,
+  createChatMessage,
+  getRecentChatMessages,
 } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth } = require('./auth');
 const {
@@ -598,6 +600,42 @@ app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {
     inventory: character.inventory,
     equipment: character.equipment,
   });
+});
+
+// New Milos City chat. senderName is always derived from the caller's own authoritative
+// character (can't be spoofed); titleText is client-supplied since the title catalog itself is
+// only known client-side (crate titles etc.) -- same trust level as titles.equipped already has
+// everywhere else (nothing server-side has ever validated title ownership on that field).
+function serializeChatMessage(row) {
+  return {
+    id: row.id,
+    senderName: row.sender_name,
+    titleText: row.title_text,
+    message: row.message,
+    sentAt: row.sent_at,
+  };
+}
+
+const CHAT_MESSAGE_MAX_LEN = 500;
+const CHAT_TITLE_MAX_LEN = 40;
+
+app.get('/chat/messages', requireAuth, (req, res) => {
+  res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
+});
+
+app.post('/chat/send', requireAuth, (req, res) => {
+  const { titleText, message } = req.body || {};
+  const trimmed = (message || '').trim();
+  if (!trimmed) return res.status(400).json({ ok: false, reason: 'Enter a message.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const senderName = `${character.firstName} ${character.lastName}`;
+  const safeTitleText = (titleText || 'CIVILIAN').slice(0, CHAT_TITLE_MAX_LEN);
+
+  createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN));
+  res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
 });
 
 app.listen(PORT, () => {

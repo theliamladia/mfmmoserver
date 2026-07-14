@@ -128,6 +128,33 @@ function getPenitentiaryRecordById(id) {
   return db.prepare('SELECT * FROM penitentiary_records WHERE id = ?').get(id);
 }
 
+// New Milos City chat: a shared table (unlike character_json) since every message needs to be
+// visible to everyone in the room, not just its sender.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    sender_name TEXT NOT NULL,
+    title_text TEXT NOT NULL,
+    message TEXT NOT NULL,
+    sent_at INTEGER NOT NULL
+  );
+`);
+const CHAT_HISTORY_LIMIT = 50;
+
+function createChatMessage(userId, senderName, titleText, message) {
+  const stmt = db.prepare(
+    'INSERT INTO chat_messages (user_id, sender_name, title_text, message, sent_at) VALUES (?, ?, ?, ?, ?)'
+  );
+  const info = stmt.run(userId, senderName, titleText, message, Date.now());
+  return info.lastInsertRowid;
+}
+
+function getRecentChatMessages() {
+  const rows = db.prepare('SELECT * FROM chat_messages ORDER BY sent_at DESC LIMIT ?').all(CHAT_HISTORY_LIMIT);
+  return rows.reverse();
+}
+
 function createUser(username, passwordHash, character) {
   const stmt = db.prepare(
     'INSERT INTO users (username, password_hash, character_json, created_at, last_seen) VALUES (?, ?, ?, ?, ?)'
@@ -178,4 +205,6 @@ module.exports = {
   getServerState,
   setServerPaused,
   setServerModifier,
+  createChatMessage,
+  getRecentChatMessages,
 };
