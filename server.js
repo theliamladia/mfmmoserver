@@ -148,6 +148,18 @@ app.get('/me', requireAuth, (req, res) => {
   res.json({ ok: true, character: JSON.parse(user.character_json) });
 });
 
+// The "Reset" button used to just wipe localStorage, back when that was the only save. Now the
+// character lives server-side, so that button did nothing except reload the same character --
+// this actually resets it, keeping the same account/login but wiping stats, cash, and everything else.
+app.post('/character/reset', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const oldCharacter = JSON.parse(user.character_json);
+  const character = newCharacter(oldCharacter.firstName, oldCharacter.lastName);
+  saveCharacter(user.id, character);
+  res.json({ ok: true, character });
+});
+
 app.get('/players/online', requireAuth, (req, res) => {
   const rows = getOnlineUsers(Date.now() - ONLINE_WINDOW_MS);
   // Send the full character so the client can compute the same title/rank badge it
