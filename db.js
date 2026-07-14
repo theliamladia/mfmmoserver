@@ -441,6 +441,43 @@ function deleteCasinoTableIfEmpty(tableId) {
   }
 }
 
+// Payment notifications: a real shared table (not character_json) since the recipient needs to
+// learn about an incoming payment even though they weren't the one who triggered the request --
+// the header bell polls this globally, independent of which page the recipient is on.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS payment_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER NOT NULL,
+    payer_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const PAYMENT_NOTIFICATION_LIMIT = 20;
+
+function createPaymentNotification(recipientUserId, payerName, amount) {
+  db.prepare(
+    'INSERT INTO payment_notifications (recipient_user_id, payer_name, amount, created_at, seen) VALUES (?, ?, ?, ?, 0)'
+  ).run(recipientUserId, payerName, amount, Date.now());
+}
+
+function getPaymentNotifications(userId) {
+  return db
+    .prepare('SELECT * FROM payment_notifications WHERE recipient_user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(userId, PAYMENT_NOTIFICATION_LIMIT);
+}
+
+function getUnseenPaymentCount(userId) {
+  return db
+    .prepare('SELECT COUNT(*) AS c FROM payment_notifications WHERE recipient_user_id = ? AND seen = 0')
+    .get(userId).c;
+}
+
+function markPaymentNotificationsSeen(userId) {
+  db.prepare('UPDATE payment_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
+}
+
 module.exports = {
   db,
   createUser,
@@ -490,4 +527,8 @@ module.exports = {
   updateSeat,
   leaveSeat,
   deleteCasinoTableIfEmpty,
+  createPaymentNotification,
+  getPaymentNotifications,
+  getUnseenPaymentCount,
+  markPaymentNotificationsSeen,
 };

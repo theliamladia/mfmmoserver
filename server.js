@@ -51,6 +51,10 @@ const {
   updateSeat,
   leaveSeat,
   deleteCasinoTableIfEmpty,
+  createPaymentNotification,
+  getPaymentNotifications,
+  getUnseenPaymentCount,
+  markPaymentNotificationsSeen,
 } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
@@ -260,12 +264,34 @@ app.post('/players/pay', requireAuth, (req, res) => {
   const targetCharacter = JSON.parse(target.character_json);
   targetCharacter.cash = round2(targetCharacter.cash + amount);
   saveCharacter(target.id, targetCharacter);
+  createPaymentNotification(target.id, `${payerCharacter.firstName} ${payerCharacter.lastName}`, round2(amount));
 
   res.json({
     ok: true,
     message: `Paid $${amount.toFixed(2)} to ${targetCharacter.firstName} ${targetCharacter.lastName}.`,
     cls: 'gain',
     character: payerCharacter,
+  });
+});
+
+function serializePaymentNotification(row) {
+  return { id: row.id, payerName: row.payer_name, amount: row.amount, createdAt: row.created_at, seen: !!row.seen };
+}
+
+app.get('/notifications/payments', requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    notifications: getPaymentNotifications(req.user.sub).map(serializePaymentNotification),
+    unseenCount: getUnseenPaymentCount(req.user.sub),
+  });
+});
+
+app.post('/notifications/payments/seen', requireAuth, (req, res) => {
+  markPaymentNotificationsSeen(req.user.sub);
+  res.json({
+    ok: true,
+    notifications: getPaymentNotifications(req.user.sub).map(serializePaymentNotification),
+    unseenCount: getUnseenPaymentCount(req.user.sub),
   });
 });
 
