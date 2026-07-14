@@ -42,8 +42,40 @@ db.exec(`
 `);
 db.prepare('INSERT OR IGNORE INTO server_state (id, paused, modifier) VALUES (1, 0, NULL)').run();
 
+// Leaderboard title-holder tracking, bolted onto the same single shared row: who currently holds
+// each daily-refreshed crown, and when the crown was last recomputed, so a repeat check on every
+// request stays a cheap single-row read except on the one day-boundary crossing it actually does
+// the full recompute.
+['leaderboard_last_check', 'looks_leader_user_id', 'networth_leader_user_id', 'level_leader_user_id'].forEach((col) => {
+  const has = db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === col);
+  if (!has) {
+    const type = col === 'leaderboard_last_check' ? 'INTEGER NOT NULL DEFAULT 0' : 'INTEGER';
+    db.exec(`ALTER TABLE server_state ADD COLUMN ${col} ${type}`);
+  }
+});
+
 function getServerState() {
   return db.prepare('SELECT paused, modifier FROM server_state WHERE id = 1').get();
+}
+
+function getLeaderboardState() {
+  return db
+    .prepare(
+      'SELECT leaderboard_last_check, looks_leader_user_id, networth_leader_user_id, level_leader_user_id FROM server_state WHERE id = 1'
+    )
+    .get();
+}
+
+function updateLeaderboardState(fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const setClause = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  db.prepare(`UPDATE server_state SET ${setClause} WHERE id = 1`).run(...values);
+}
+
+function getAllUsersForLeaderboard() {
+  return db.prepare('SELECT id, username, character_json FROM users').all();
 }
 
 function setServerPaused(paused) {
@@ -531,4 +563,7 @@ module.exports = {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  getLeaderboardState,
+  updateLeaderboardState,
+  getAllUsersForLeaderboard,
 };

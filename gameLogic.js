@@ -1658,6 +1658,72 @@ function creditSellerForSale(sellerCharacter, itemId, qty, total, buyerName) {
   sellerCharacter.mtnHistory.push({ type: 'sold', itemId, qty, totalPrice: total, ts: Date.now(), counterpartyName: buyerName });
 }
 
+// ---------- Leaderboard (Looks / Net Worth / Level) ----------
+// Title ids must match the client's title catalog (core.js) exactly -- these are the only
+// server-known title ids, since granting/revoking them is the one case where the server needs to
+// understand a specific title rather than treating character.titles as opaque client data.
+const LEADERBOARD_TITLES = {
+  looks: { id: 'looksmaxxer', name: 'LOOKSMAXXER' },
+  networth: { id: 'highestNetWorth', name: 'HIGHEST NET WORTH' },
+  level: { id: 'highestLevel', name: 'HIGHEST LEVEL' },
+};
+
+// Mirrors the client's computeLevel() in core.js exactly.
+function computeCharacterLevel(character) {
+  const s = character.stats;
+  const avg = (s.health + s.attack + s.speed + s.defense + s.looks) / 5;
+  return Math.max(1, Math.floor(avg / 10));
+}
+
+// Cash + bank balance + casino chips, minus any owed credit card balance.
+function computeNetWorth(character) {
+  const bank = character.bank || {};
+  return round2((character.cash || 0) + (bank.balance || 0) + (character.chips || 0) - (bank.creditBalance || 0));
+}
+
+function leaderboardValue(character, category) {
+  if (category === 'looks') return character.stats.looks;
+  if (category === 'networth') return computeNetWorth(character);
+  return computeCharacterLevel(character);
+}
+
+// Ties broken by lowest user id (i.e. whoever got there first), so the crown doesn't flicker
+// between tied players on every recheck.
+function computeLeaderboardWinners(users) {
+  const winners = {};
+  ['looks', 'networth', 'level'].forEach((category) => {
+    let best = null;
+    users.forEach((u) => {
+      const value = leaderboardValue(u.character, category);
+      if (!best || value > best.value || (value === best.value && u.id < best.id)) {
+        best = { id: u.id, value };
+      }
+    });
+    winners[category] = best ? best.id : null;
+  });
+  return winners;
+}
+
+// Read-only ranked view for the leaderboard tab -- top N per category with each entry's current
+// value and whether they presently hold that category's title.
+function buildLeaderboardBoard(users, limit = 10) {
+  const board = {};
+  ['looks', 'networth', 'level'].forEach((category) => {
+    const titleId = LEADERBOARD_TITLES[category].id;
+    board[category] = users
+      .map((u) => ({
+        userId: u.id,
+        username: u.username,
+        name: `${u.character.firstName} ${u.character.lastName}`,
+        value: leaderboardValue(u.character, category),
+        holdsTitle: (u.character.titles.owned || []).includes(titleId),
+      }))
+      .sort((a, b) => b.value - a.value || a.userId - b.userId)
+      .slice(0, limit);
+  });
+  return board;
+}
+
 module.exports = {
   newCharacter,
   doWork,
@@ -1725,6 +1791,11 @@ module.exports = {
   doCancelListing,
   doBuyListing,
   creditSellerForSale,
+  LEADERBOARD_TITLES,
+  computeCharacterLevel,
+  computeNetWorth,
+  computeLeaderboardWinners,
+  buildLeaderboardBoard,
   getRemainingCooldown,
   round2,
   COOLDOWN_MS,

@@ -55,6 +55,9 @@ const {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  getLeaderboardState,
+  updateLeaderboardState,
+  getAllUsersForLeaderboard,
 } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
@@ -124,6 +127,9 @@ const {
   doBuyListing,
   creditSellerForSale,
   round2,
+  LEADERBOARD_TITLES,
+  computeLeaderboardWinners,
+  buildLeaderboardBoard,
 } = require('./gameLogic');
 
 const app = express();
@@ -145,6 +151,69 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 app.use(cors({ origin: ALLOWED_ORIGINS }));
 app.use(express.json());
+
+// Leaderboard titles (LOOKSMAXXER / HIGHEST NET WORTH / HIGHEST LEVEL) are recomputed once a day,
+// check-on-poll style like everything else in this codebase -- no cron. This middleware runs on
+// every request so the daily rollover happens promptly no matter which page anyone is on, but the
+// guard is a single cheap row read except on the one request that actually crosses the boundary.
+const LEADERBOARD_RECHECK_MS = 24 * 60 * 60 * 1000;
+
+function maybeRecomputeLeaderboard() {
+  const state = getLeaderboardState();
+  if (Date.now() - state.leaderboard_last_check < LEADERBOARD_RECHECK_MS) return;
+
+  const rows = getAllUsersForLeaderboard();
+  const users = rows.map((r) => ({ id: r.id, username: r.username, character: JSON.parse(r.character_json) }));
+  if (!users.length) {
+    updateLeaderboardState({ leaderboard_last_check: Date.now() });
+    return;
+  }
+
+  const winners = computeLeaderboardWinners(users);
+  const byId = new Map(users.map((u) => [u.id, u]));
+  const prevLeaderKey = {
+    looks: 'looks_leader_user_id',
+    networth: 'networth_leader_user_id',
+    level: 'level_leader_user_id',
+  };
+  const touched = new Set();
+
+  Object.keys(LEADERBOARD_TITLES).forEach((category) => {
+    const titleId = LEADERBOARD_TITLES[category].id;
+    const prevLeaderId = state[prevLeaderKey[category]];
+    const newLeaderId = winners[category];
+    if (prevLeaderId === newLeaderId) return;
+
+    if (prevLeaderId && byId.has(prevLeaderId)) {
+      const prevUser = byId.get(prevLeaderId);
+      const idx = prevUser.character.titles.owned.indexOf(titleId);
+      if (idx >= 0) prevUser.character.titles.owned.splice(idx, 1);
+      if (prevUser.character.titles.equipped === titleId) prevUser.character.titles.equipped = null;
+      touched.add(prevLeaderId);
+    }
+
+    if (newLeaderId && byId.has(newLeaderId)) {
+      const newUser = byId.get(newLeaderId);
+      if (!newUser.character.titles.owned.includes(titleId)) newUser.character.titles.owned.push(titleId);
+      newUser.character.titles.equipped = titleId;
+      touched.add(newLeaderId);
+    }
+  });
+
+  touched.forEach((userId) => saveCharacter(userId, byId.get(userId).character));
+
+  updateLeaderboardState({
+    leaderboard_last_check: Date.now(),
+    looks_leader_user_id: winners.looks,
+    networth_leader_user_id: winners.networth,
+    level_leader_user_id: winners.level,
+  });
+}
+
+app.use((req, res, next) => {
+  maybeRecomputeLeaderboard();
+  next();
+});
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
@@ -292,6 +361,20 @@ app.post('/notifications/payments/seen', requireAuth, (req, res) => {
     ok: true,
     notifications: getPaymentNotifications(req.user.sub).map(serializePaymentNotification),
     unseenCount: getUnseenPaymentCount(req.user.sub),
+  });
+});
+
+app.get('/leaderboard', requireAuth, (req, res) => {
+  const rows = getAllUsersForLeaderboard();
+  const users = rows.map((r) => ({ id: r.id, username: r.username, character: JSON.parse(r.character_json) }));
+  const board = buildLeaderboardBoard(users);
+  const state = getLeaderboardState();
+  res.json({
+    ok: true,
+    looks: board.looks,
+    networth: board.networth,
+    level: board.level,
+    nextRefreshAt: state.leaderboard_last_check + LEADERBOARD_RECHECK_MS,
   });
 });
 
