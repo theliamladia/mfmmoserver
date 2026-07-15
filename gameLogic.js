@@ -79,7 +79,10 @@ const JAIL_FIGHT_STAT_GAIN_MIN = 0.1;
 const JAIL_FIGHT_STAT_GAIN_MAX = 0.3;
 const JAIL_FIGHT_LOSS_MIN = 5;
 const JAIL_FIGHT_LOSS_MAX = 20;
-const JAIL_CONTRABAND_MARKUP = 1.75;
+// Was 1.75x -- with no jail-exclusive benefit that made contraband strictly worse than just
+// waiting to buy the same item after release. Lowered to a believable "risk premium," and melee
+// contraband now grants real immediate value (see doJailFight) instead of just sitting inert.
+const JAIL_CONTRABAND_MARKUP = 1.2;
 
 const RENAME_COST = 10000;
 const RANGE_COOLDOWN_MS = 3000;
@@ -88,6 +91,17 @@ const GOOD_HUSTLE_MAX_ALLIANCE = 59; // Good Hustles allowed for Neutral or bett
 const JOB_SKILL_TRAIN_MIN = 0.02;
 const JOB_SKILL_TRAIN_MAX = 0.06;
 const LOOKS_TRAIN_BONUS_MAX = 1.2;
+// Everyone starts at 10 Looks, so a raw sqrt(looks/100) curve already hands new characters most of
+// the bonus before they've invested a cent. Normalize so the *starting* stat yields exactly 0% and
+// 100 Looks still yields the same +120% cap -- same diminishing-returns shape, just re-based so the
+// bonus reflects actual investment instead of a freebie built into the starting stats.
+const LOOKS_TRAIN_BASE = 10;
+const LOOKS_TRAIN_K = LOOKS_TRAIN_BONUS_MAX / (1 - Math.sqrt(LOOKS_TRAIN_BASE / 100));
+// Late-game payoff for staying Good: once you've both maxed out the Good job ladder AND kept your
+// alliance actually Good (not just Neutral), Good Hustle pay gets a real multiplier -- previously
+// there was no long-term reason to stay Good over just avoiding Bad.
+const GOOD_CEO_MULTIPLIER = 1.6;
+const GOOD_CEO_MIN_AVG = 95; // Regional Manager rank
 
 const JOB_RANKS = [
   { minAvg: 0, title: 'Trainee', payMin: 0.10, payMax: 0.50, cooldownMs: 2000 },
@@ -265,9 +279,14 @@ function goodJobPerkActive(character, jobId) {
   return character.jobs.currentJob === jobId && goodJobSkillAvg(character) >= JOB_PERK_MIN_AVG;
 }
 
-// sqrt curve so early Looks gains matter, not just Looks near the cap
+// sqrt curve so early Looks gains matter, not just Looks near the cap -- re-based against
+// LOOKS_TRAIN_BASE (see constant comment) so the starting stat itself grants no bonus.
+function looksTrainMult(character) {
+  return 1 + Math.max(0, Math.sqrt(character.stats.looks / 100) - Math.sqrt(LOOKS_TRAIN_BASE / 100)) * LOOKS_TRAIN_K;
+}
+
 function goodJobSkillTrainMult(character) {
-  return 1 + Math.sqrt(character.stats.looks / 100) * LOOKS_TRAIN_BONUS_MAX;
+  return looksTrainMult(character);
 }
 
 function badJobSkillAvg(character) {
@@ -284,7 +303,7 @@ function badJobPerkActive(character, jobId) {
 }
 
 function badJobSkillTrainMult(character) {
-  return 1 + Math.sqrt(character.stats.looks / 100) * LOOKS_TRAIN_BONUS_MAX;
+  return looksTrainMult(character);
 }
 
 function badJobBustChance(character) {
@@ -316,7 +335,7 @@ function newCharacter(firstName, lastName) {
       ...Object.fromEntries(CRIME_TIER_IDS.map((id) => [`crime_${id}`, 0])),
     },
     gym: { steroidTier: null, roidJailClicksRemaining: 0 },
-    jail: { inJail: false, crime: null, yearsRemaining: 0, serving: false },
+    jail: { inJail: false, crime: null, yearsRemaining: 0, serving: false, contrabandAtkBonus: 0 },
     settings: { hideMilosWarning: false },
     titles: { owned: [], equipped: null },
     marriage: { proposedTo: null, spouseName: null },
@@ -332,6 +351,7 @@ function newCharacter(firstName, lastName) {
     crimeRecord: { streak: 0 },
     moralsCenter: { choice: null, lastTickTs: Date.now() },
     mtnHistory: [],
+    maxxPurchased: [],
     blackjack: { phase: 'betting', playerCards: [], dealerCards: [], bet: 0 },
     combat: { active: false, enemyKey: null, enemyHp: 0, enemyMaxHp: 0, playerHp: 0, playerMaxHp: 0, turn: null, guarding: false },
   };
@@ -496,13 +516,18 @@ function doBuyFood(character, itemId) {
   };
 }
 
-// Mirrors the client's doBuyMaxx() exactly.
+// Each Maxx item is a one-time procedure (you don't get a second Jawline Filler) -- this also
+// closes the pricing loophole where re-buying a cheap item repeatedly could out-value a pricier
+// one for less money, since repeat purchases are no longer possible at all.
 function doBuyMaxx(character, itemId) {
   const item = MAXX_ITEMS_BY_ID[itemId];
   if (!item) return { ok: false, reason: 'Unknown item.' };
+  if (!character.maxxPurchased) character.maxxPurchased = [];
+  if (character.maxxPurchased.includes(itemId)) return { ok: false, reason: 'Already purchased.' };
   if (character.cash < item.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
 
   character.cash -= item.cost;
+  character.maxxPurchased.push(itemId);
   if (item.looks) character.stats.looks = clampStat(character.stats.looks + item.looks);
   if (item.speed) character.stats.speed = clampStat(character.stats.speed + item.speed);
   if (item.height) character.height += item.height;
@@ -916,14 +941,15 @@ function doGoodJobWork(character, skillKey) {
   const remaining = getRemainingCooldown(character, cooldownKey, rank.cooldownMs);
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
-  const gain = round2(randFloat(rank.payMin, rank.payMax));
+  const ceoActive = goodJobSkillAvg(character) >= GOOD_CEO_MIN_AVG && character.alliance <= COMBAT_GOOD_MAX_ALLIANCE;
+  const gain = round2(randFloat(rank.payMin, rank.payMax) * (ceoActive ? GOOD_CEO_MULTIPLIER : 1));
   character.cash = round2(character.cash + gain);
   const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * goodJobSkillTrainMult(character);
   character.jobs.skills[skillKey] = clampStat(character.jobs.skills[skillKey] + skillGain);
   character.cooldowns[cooldownKey] = Date.now();
   character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
 
-  const messages = [{ message: `${job.name}: +$${gain.toFixed(2)}.`, cls: 'gain' }];
+  const messages = [{ message: `${job.name}: +$${gain.toFixed(2)}${ceoActive ? ' (👔 CEO Bonus)' : ''}.`, cls: 'gain' }];
   if (job.id === 'pizza' && !character.jobs.pizzaPerkGranted && goodJobPerkActive(character, 'pizza')) {
     character.stats.speed = clampStat(character.stats.speed + 2);
     character.jobs.pizzaPerkGranted = true;
@@ -965,15 +991,18 @@ function doBadJobWork(character, skillKey) {
 
   character.cooldowns[cooldownKey] = Date.now();
   if (Math.random() < badJobBustChance(character)) {
+    const years = BAD_JOB_JAIL_YEARS + character.crimeRecord.streak;
+    character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
     character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
     character.jail.inJail = true;
     character.jail.crime = job.name;
-    character.jail.yearsRemaining = BAD_JOB_JAIL_YEARS;
+    character.jail.yearsRemaining = years;
     character.jail.serving = false;
+    const streakNote = years > BAD_JOB_JAIL_YEARS ? ` (${BAD_JOB_JAIL_YEARS} base + ${years - BAD_JOB_JAIL_YEARS} repeat-offender)` : '';
     return {
       ok: true,
       jailed: true,
-      message: `Busted working for ${job.name}! Sentenced to ${BAD_JOB_JAIL_YEARS} year.`,
+      message: `Busted working for ${job.name}! Sentenced to ${years} year(s)${streakNote}.`,
       cls: 'loss',
       character,
     };
@@ -1142,15 +1171,18 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
     };
   }
 
+  const years = ROBBERY_JAIL_YEARS + attacker.crimeRecord.streak;
+  attacker.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, attacker.crimeRecord.streak + 1);
   attacker.alliance = clampStat(Math.max(attacker.alliance, GUZMAN_MIN_ALLIANCE));
   attacker.jail.inJail = true;
   attacker.jail.crime = 'Attempted Robbery';
-  attacker.jail.yearsRemaining = ROBBERY_JAIL_YEARS;
+  attacker.jail.yearsRemaining = years;
   attacker.jail.serving = false;
+  const streakNote = years > ROBBERY_JAIL_YEARS ? ` (${ROBBERY_JAIL_YEARS} base + ${years - ROBBERY_JAIL_YEARS} repeat-offender)` : '';
   return {
     ok: true,
     jailed: true,
-    message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${ROBBERY_JAIL_YEARS} year.`,
+    message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${years} year(s)${streakNote}.`,
     cls: 'loss',
     attacker,
     target,
@@ -1519,33 +1551,48 @@ function doJailFight(character) {
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
   character.cooldowns.jailFight = Date.now();
-  const myPower = character.stats.attack + character.stats.defense + gearStatBonus(character, 'attack') + gearStatBonus(character, 'defense');
+  const contrabandBonus = character.jail.contrabandAtkBonus || 0;
+  const myPower = character.stats.attack + character.stats.defense + gearStatBonus(character, 'attack') + gearStatBonus(character, 'defense') + contrabandBonus;
   const inmatePower = 20;
   const winChance = Math.max(0.2, Math.min(0.85, 0.5 + (myPower - inmatePower) * 0.01));
+  // A smuggled weapon is a one-time edge on your very next fight, then it's used up -- same spirit
+  // as consuming an item, not a permanent equip.
+  character.jail.contrabandAtkBonus = 0;
+  const bonusNote = contrabandBonus > 0 ? ` (used your smuggled weapon: +${contrabandBonus} Attack)` : '';
 
   if (Math.random() < winChance) {
     const stat = Math.random() < 0.5 ? 'attack' : 'defense';
     const amount = round2(randFloat(JAIL_FIGHT_STAT_GAIN_MIN, JAIL_FIGHT_STAT_GAIN_MAX));
     character.stats[stat] = clampStat(character.stats[stat] + amount);
     const label = stat === 'attack' ? 'Attack' : 'Defense';
-    return { ok: true, won: true, message: `You won the yard fight! +${amount.toFixed(2)} ${label}.`, cls: 'gain', character };
+    return { ok: true, won: true, message: `You won the yard fight! +${amount.toFixed(2)} ${label}${bonusNote}.`, cls: 'gain', character };
   }
   const lost = Math.min(character.cash, randInt(JAIL_FIGHT_LOSS_MIN, JAIL_FIGHT_LOSS_MAX));
   character.cash -= lost;
-  return { ok: true, won: false, message: `You lost the yard fight and got shaken down for $${lost}.`, cls: 'loss', character };
+  return { ok: true, won: false, message: `You lost the yard fight and got shaken down for $${lost}${bonusNote}.`, cls: 'loss', character };
 }
 
 function jailContrabandItemDef(itemId) {
   return MELEE_ITEMS_BY_ID[itemId] || DRUG_ITEMS_BY_ID[itemId] || null;
 }
 
-// Mirrors the client's doBuyContraband() exactly.
+// Melee contraband now grants a real, jail-exclusive edge (a one-time Attack bonus consumed on
+// your next Yard Fight, see doJailFight) instead of just sitting in inventory until release, which
+// is when the same item could always be bought cheaper anyway. Drug contraband stays a "have it
+// ready to sell the moment you're out" convenience buy -- the lower markup (see JAIL_CONTRABAND_MARKUP)
+// makes that a small-but-real time-saver instead of a straight loss.
 function doBuyContraband(character, itemId) {
   const item = jailContrabandItemDef(itemId);
   if (!item) return { ok: false, reason: 'Unknown item.' };
   const cost = round2((item.cost !== undefined ? item.cost : item.wholesaleCost) * JAIL_CONTRABAND_MARKUP);
   if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash = round2(character.cash - cost);
+
+  if (item.type === 'melee') {
+    character.jail.contrabandAtkBonus = (character.jail.contrabandAtkBonus || 0) + item.atkBonus;
+    return { ok: true, message: `Smuggled in ${item.name} for $${cost.toFixed(2)} -- +${item.atkBonus} Attack on your next Yard Fight.`, cls: 'gain', character };
+  }
+
   addToInventory(character, item.id, 1);
   return { ok: true, message: `Smuggled in ${item.name} for $${cost.toFixed(2)}.`, cls: 'gain', character };
 }
@@ -1793,6 +1840,7 @@ module.exports = {
   creditSellerForSale,
   LEADERBOARD_TITLES,
   computeCharacterLevel,
+  looksTrainMult,
   computeNetWorth,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
