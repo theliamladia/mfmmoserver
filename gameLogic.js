@@ -337,7 +337,7 @@ function newCharacter(firstName, lastName) {
     gym: { steroidTier: null, roidJailClicksRemaining: 0 },
     jail: { inJail: false, crime: null, yearsRemaining: 0, serving: false, contrabandAtkBonus: 0 },
     settings: { hideMilosWarning: false },
-    titles: { owned: [], equipped: null },
+    titles: { owned: [], equipped: null, customTitles: [] },
     marriage: { proposedTo: null, spouseName: null },
     licenses: { gunSafety: false, concealedPermit: false, concealedPendingUntil: 0 },
     inventory: [],
