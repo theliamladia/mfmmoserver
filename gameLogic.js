@@ -50,7 +50,7 @@ const DEFENSE_PER_LB = 0.5;
 const SPEED_LOSS_PER_LB = 1;
 const MUSCLE_GAIN_RATIO = 0.3; // muscle builds slowly -- only this fraction of the fat burned per workout
 const STRETCH_HEIGHT_COOLDOWN_MS = 30000;
-const STRETCH_HEIGHT_MUSCLE_PCT = 0.3;
+const STRETCH_HEIGHT_MUSCLE_COST = 60;
 const STRETCH_HEIGHT_GAIN_IN = 1;
 const JOB_PERK_MIN_AVG = 55; // Supervisor/Lieutenant and up
 
@@ -264,6 +264,14 @@ function clampStat(v) {
   return Math.max(0, Math.min(STAT_CAP, Math.round(v * 100) / 100));
 }
 
+// Same rounding/floor as clampStat but no upper bound -- Looks (and the body-exercise counters
+// that feed it) are meant to grind past 100 as a flex/vanity number. Every gameplay BENEFIT
+// derived from Looks still reads it through Math.min(..., STAT_CAP) at the point of use, so the
+// uncapped number never buys more than the effective 100 worth of bonus.
+function clampStatUncapped(v) {
+  return Math.max(0, Math.round(v * 100) / 100);
+}
+
 function ensureGymBodyState(character) {
   if (!character.gym) character.gym = {};
   if (!character.gym.bodyExercises) {
@@ -296,7 +304,7 @@ function computeFaceLooksScore(character) {
 }
 
 function recomputeLooks(character) {
-  character.stats.looks = clampStat(computeBodyLooksScore(character) + computeFaceLooksScore(character));
+  character.stats.looks = clampStatUncapped(computeBodyLooksScore(character) + computeFaceLooksScore(character));
 }
 
 function round1(v) {
@@ -355,7 +363,8 @@ function goodJobPerkActive(character, jobId) {
 // sqrt curve so early Looks gains matter, not just Looks near the cap -- re-based against
 // LOOKS_TRAIN_BASE (see constant comment) so the starting stat itself grants no bonus.
 function looksTrainMult(character) {
-  return 1 + Math.max(0, Math.sqrt(character.stats.looks / 100) - Math.sqrt(LOOKS_TRAIN_BASE / 100)) * LOOKS_TRAIN_K;
+  const looks = Math.min(character.stats.looks, STAT_CAP);
+  return 1 + Math.max(0, Math.sqrt(looks / 100) - Math.sqrt(LOOKS_TRAIN_BASE / 100)) * LOOKS_TRAIN_K;
 }
 
 function goodJobSkillTrainMult(character) {
@@ -641,26 +650,26 @@ function doBodyExercise(character, bodyPart, exerciseKey) {
   character.cooldowns[cooldownKey] = Date.now();
   const exercises = ensureGymBodyState(character);
   const gain = round2(randFloat(BODY_EXERCISE_TRAIN_MIN, BODY_EXERCISE_TRAIN_MAX));
-  exercises[bodyPart][exerciseKey] = clampStat(exercises[bodyPart][exerciseKey] + gain);
+  exercises[bodyPart][exerciseKey] = clampStatUncapped(exercises[bodyPart][exerciseKey] + gain);
   recomputeLooks(character);
   return { ok: true, message: `Trained ${bodyPart} (${exerciseKey}): +${gain.toFixed(2)}.`, cls: 'gain', character };
 }
 
-// Trades muscle mass for height -- costs 30% of current Muscle, so it's only worth doing once
-// you've built up a real muscle base from workouts.
+// Trades muscle mass for height -- costs a fixed 60 lbs of Muscle per inch.
 function doStretchForHeight(character) {
   ensureWeightState(character);
   const remaining = getRemainingCooldown(character, 'stretchHeight', STRETCH_HEIGHT_COOLDOWN_MS);
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
-  if (character.muscleGained <= 0) return { ok: false, reason: 'Not enough Muscle -- hit the gym first.' };
+  if (character.muscleGained < STRETCH_HEIGHT_MUSCLE_COST) {
+    return { ok: false, reason: `Need at least ${STRETCH_HEIGHT_MUSCLE_COST} lbs of Muscle -- hit the gym first.` };
+  }
 
   character.cooldowns.stretchHeight = Date.now();
-  const cost = round2(character.muscleGained * STRETCH_HEIGHT_MUSCLE_PCT);
-  character.muscleGained = round2(Math.max(0, character.muscleGained - cost));
+  character.muscleGained = round2(Math.max(0, character.muscleGained - STRETCH_HEIGHT_MUSCLE_COST));
   character.height += STRETCH_HEIGHT_GAIN_IN;
   return {
     ok: true,
-    message: `Stretched for height: -${cost} lbs Muscle, +${STRETCH_HEIGHT_GAIN_IN}" Height.`,
+    message: `Stretched for height: -${STRETCH_HEIGHT_MUSCLE_COST} lbs Muscle, +${STRETCH_HEIGHT_GAIN_IN}" Height.`,
     cls: 'gain',
     character,
   };
@@ -1298,7 +1307,7 @@ function doRobbery(character, activeModifier) {
 
   character.cooldowns.robbery = Date.now();
   const speed = character.stats.speed;
-  const looks = character.stats.looks;
+  const looks = Math.min(character.stats.looks, STAT_CAP);
   const findOutChance = Math.max(0.1, Math.min(0.55, 0.55 - (speed / 100) * 0.35 - (looks / 100) * 0.10));
 
   if (Math.random() >= findOutChance) {
@@ -1345,7 +1354,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
 
   attacker.cooldowns[cooldownKey] = Date.now();
   const speed = attacker.stats.speed;
-  const looks = attacker.stats.looks;
+  const looks = Math.min(attacker.stats.looks, STAT_CAP);
   const findOutChance = Math.max(0.1, Math.min(0.55, 0.55 - (speed / 100) * 0.35 - (looks / 100) * 0.10));
 
   if (Math.random() >= findOutChance) {
@@ -1910,7 +1919,10 @@ const LEADERBOARD_TITLES = {
   looks: { id: 'looksmaxxer', name: 'LOOKSMAXXER' },
   networth: { id: 'highestNetWorth', name: 'HIGHEST NET WORTH' },
   level: { id: 'highestLevel', name: 'HIGHEST LEVEL' },
+  height: { id: 'heightmaxxed', name: 'HeightMAXXED' },
 };
+
+const LEADERBOARD_CATEGORIES = ['looks', 'networth', 'level', 'height'];
 
 // Mirrors the client's computeLevel() in core.js exactly.
 function computeCharacterLevel(character) {
@@ -1928,6 +1940,7 @@ function computeNetWorth(character) {
 function leaderboardValue(character, category) {
   if (category === 'looks') return character.stats.looks;
   if (category === 'networth') return computeNetWorth(character);
+  if (category === 'height') return character.height;
   return computeCharacterLevel(character);
 }
 
@@ -1935,7 +1948,7 @@ function leaderboardValue(character, category) {
 // between tied players on every recheck.
 function computeLeaderboardWinners(users) {
   const winners = {};
-  ['looks', 'networth', 'level'].forEach((category) => {
+  LEADERBOARD_CATEGORIES.forEach((category) => {
     let best = null;
     users.forEach((u) => {
       const value = leaderboardValue(u.character, category);
@@ -1952,7 +1965,7 @@ function computeLeaderboardWinners(users) {
 // value and whether they presently hold that category's title.
 function buildLeaderboardBoard(users, limit = 10) {
   const board = {};
-  ['looks', 'networth', 'level'].forEach((category) => {
+  LEADERBOARD_CATEGORIES.forEach((category) => {
     const titleId = LEADERBOARD_TITLES[category].id;
     board[category] = users
       .map((u) => ({
@@ -2035,6 +2048,7 @@ module.exports = {
   doBuyListing,
   creditSellerForSale,
   LEADERBOARD_TITLES,
+  LEADERBOARD_CATEGORIES,
   computeCharacterLevel,
   looksTrainMult,
   computeNetWorth,

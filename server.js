@@ -182,6 +182,7 @@ function maybeRecomputeLeaderboard() {
     looks: 'looks_leader_user_id',
     networth: 'networth_leader_user_id',
     level: 'level_leader_user_id',
+    height: 'height_leader_user_id',
   };
   const touched = new Set();
 
@@ -214,6 +215,7 @@ function maybeRecomputeLeaderboard() {
     looks_leader_user_id: winners.looks,
     networth_leader_user_id: winners.networth,
     level_leader_user_id: winners.level,
+    height_leader_user_id: winners.height,
   });
 }
 
@@ -384,6 +386,7 @@ app.get('/leaderboard', requireAuth, (req, res) => {
     looks: board.looks,
     networth: board.networth,
     level: board.level,
+    height: board.height,
     nextRefreshAt: state.leaderboard_last_check + LEADERBOARD_RECHECK_MS,
   });
 });

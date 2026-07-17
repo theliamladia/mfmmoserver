@@ -46,7 +46,7 @@ db.prepare('INSERT OR IGNORE INTO server_state (id, paused, modifier) VALUES (1,
 // each daily-refreshed crown, and when the crown was last recomputed, so a repeat check on every
 // request stays a cheap single-row read except on the one day-boundary crossing it actually does
 // the full recompute.
-['leaderboard_last_check', 'looks_leader_user_id', 'networth_leader_user_id', 'level_leader_user_id'].forEach((col) => {
+['leaderboard_last_check', 'looks_leader_user_id', 'networth_leader_user_id', 'level_leader_user_id', 'height_leader_user_id'].forEach((col) => {
   const has = db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === col);
   if (!has) {
     const type = col === 'leaderboard_last_check' ? 'INTEGER NOT NULL DEFAULT 0' : 'INTEGER';
@@ -61,7 +61,7 @@ function getServerState() {
 function getLeaderboardState() {
   return db
     .prepare(
-      'SELECT leaderboard_last_check, looks_leader_user_id, networth_leader_user_id, level_leader_user_id FROM server_state WHERE id = 1'
+      'SELECT leaderboard_last_check, looks_leader_user_id, networth_leader_user_id, level_leader_user_id, height_leader_user_id FROM server_state WHERE id = 1'
     )
     .get();
 }
