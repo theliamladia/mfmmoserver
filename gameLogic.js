@@ -23,11 +23,10 @@ const CRIME_RISK_MIN = 0.05;
 const CRIME_STAT_MITIGATION = 0.5;
 const COMMUNITY_SERVICE_COOLDOWN_MS = 60000;
 const COMMUNITY_SERVICE_BASE_COST = 750;
-const COMMUNITY_SERVICE_STREAK_REDUCTION = 2;
+const COMMUNITY_SERVICE_STREAK_REDUCTION = 4;
 
 const GYM_BURN_LBS = 0.5;
 const GYM_COST = 20;
-const GYM_LOOKS_GAIN = 0.5;
 const GYM_SPEED_GAIN = 0.6;
 const STEROID_TIERS_BY_ID = {
   mild: { id: 'mild', name: '💊 Mild Cycle', mult: 1.75, jailChance: 0.2, jailClicks: 3 },
@@ -36,9 +35,23 @@ const STEROID_TIERS_BY_ID = {
 };
 const ROID_ESCAPE_COST = GYM_COST * 4;
 
+// Body is 90% of Looks, Face (Maxx items, see MAXX_ITEMS_BY_ID) is the other 10%. Body score is the
+// average of 5 body-part averages (each part = average of its 4 exercises, 0-100), scaled to 90.
+const BODY_PARTS = ['chest', 'arms', 'legs', 'abs', 'back'];
+const BODY_EXERCISE_KEYS = ['ex1', 'ex2', 'ex3', 'ex4'];
+const BODY_EXERCISE_COOLDOWN_MS = 8000;
+const BODY_EXERCISE_TRAIN_MIN = 0.15;
+const BODY_EXERCISE_TRAIN_MAX = 0.4;
+const BODY_LOOKS_WEIGHT = 0.9;
+const FACE_LOOKS_WEIGHT = 0.1;
+
 const CALORIES_PER_LB = 3500;
-const DEFENSE_PER_LB = 1;
+const DEFENSE_PER_LB = 0.5;
 const SPEED_LOSS_PER_LB = 1;
+const MUSCLE_GAIN_RATIO = 0.3; // muscle builds slowly -- only this fraction of the fat burned per workout
+const STRETCH_HEIGHT_COOLDOWN_MS = 30000;
+const STRETCH_HEIGHT_MUSCLE_PCT = 0.3;
+const STRETCH_HEIGHT_GAIN_IN = 1;
 const JOB_PERK_MIN_AVG = 55; // Supervisor/Lieutenant and up
 
 const BANK_TIERS = [
@@ -72,11 +85,15 @@ const CONCEALED_APPLY_COST = 2000;
 const CONCEALED_WAIT_MS = 10 * 60 * 1000;
 
 const JAIL_WORKOUT_COOLDOWN_MS = 6000;
-const JAIL_WORKOUT_GAIN_MIN = 0.1;
-const JAIL_WORKOUT_GAIN_MAX = 0.25;
+const JAIL_WORKOUT_ATK_GAIN_MIN = 0.1;
+const JAIL_WORKOUT_ATK_GAIN_MAX = 0.25;
+const JAIL_WORKOUT_DEF_GAIN_MIN = 0.05;
+const JAIL_WORKOUT_DEF_GAIN_MAX = 0.15;
 const JAIL_FIGHT_COOLDOWN_MS = 8000;
-const JAIL_FIGHT_STAT_GAIN_MIN = 0.1;
-const JAIL_FIGHT_STAT_GAIN_MAX = 0.3;
+const JAIL_FIGHT_ATK_GAIN_MIN = 0.1;
+const JAIL_FIGHT_ATK_GAIN_MAX = 0.3;
+const JAIL_FIGHT_DEF_GAIN_MIN = 0.05;
+const JAIL_FIGHT_DEF_GAIN_MAX = 0.15;
 const JAIL_FIGHT_LOSS_MIN = 5;
 const JAIL_FIGHT_LOSS_MAX = 20;
 // Was 1.75x -- with no jail-exclusive benefit that made contraband strictly worse than just
@@ -145,6 +162,9 @@ const FOOD_ITEMS_BY_ID = {
   pizza: { id: 'pizza', name: '🍕 Pizza Slice', cost: 1, calories: 285 },
   calzone: { id: 'calzone', name: '🥟 Calzone', cost: 3, calories: 650 },
   pizzamax: { id: 'pizzamax', name: '🍕 Pizzamax (Whole Pie)', cost: 10, calories: 2000 },
+  dinuguan: { id: 'dinuguan', name: '🍲 Dinuguan', cost: 15, calories: 900 },
+  halohalo: { id: 'halohalo', name: '🍧 Halo Halo', cost: 20, calories: 1000 },
+  primerib: { id: 'primerib', name: '🥩 Prime Rib', cost: 30, calories: 1200 },
 };
 
 const DRUG_ITEMS_BY_ID = {
@@ -175,8 +195,16 @@ const NPC_TYPES = {
   cop: { name: '👮 Cop', hp: 50, attack: 14, defense: 9, minReward: 90, maxReward: 220 },
   thug: { name: '🥷 Thug', hp: 30, attack: 8, defense: 4, minReward: 65, maxReward: 160 },
   gangster: { name: '🕴️ Gangster', hp: 45, attack: 12, defense: 7, minReward: 130, maxReward: 300 },
+  goon: { name: '🥊 Goon', hp: 32, attack: 9, defense: 5, minReward: 70, maxReward: 170 },
+  gangbanger: { name: '🔫 Gangbanger', hp: 48, attack: 13, defense: 7, minReward: 140, maxReward: 320 },
+  vagabond: { name: '🎒 Vagabond', hp: 18, attack: 4, defense: 2, minReward: 25, maxReward: 80 },
+  miscreant: { name: '🃏 Miscreant', hp: 35, attack: 9, defense: 5, minReward: 60, maxReward: 150 },
+  // Ultra-rare (1/1000) boss fight, rollable regardless of alliance -- effectively unbeatable, a
+  // jackpot easter egg rather than a normal fight.
+  milos: { name: '👹 Milos', hp: 100000, attack: 50, defense: 40, minReward: 100000, maxReward: 500000 },
 };
 const NPC_CITIZEN = NPC_TYPES.citizen;
+const MILOS_BOSS_CHANCE = 0.001;
 
 const COMBAT_GOOD_MAX_ALLIANCE = 39; // Combat: Good alignment (not Neutral) fights Gangsters/Thugs
 const COMBAT_COOLDOWN_MS = 5000;
@@ -190,14 +218,20 @@ const COMBAT_STAT_GAIN_CHANCE = 0.4;
 const COMBAT_STAT_GAIN_MIN = 0.1;
 const COMBAT_STAT_GAIN_MAX = 0.3;
 
+// Face is only 10% of Looks (see computeFaceLooksScore/computeBodyLooksScore) but costs scale up
+// ~1.5x from the old all-looks pricing so that small slice stays just as hard to max as Body.
 const MAXX_ITEMS_BY_ID = {
-  mewing: { id: 'mewing', name: '💋 Mewing Course', cost: 500, looks: 1, desc: '+1 Looks' },
-  bonesmash: { id: 'bonesmash', name: '🔨 Bone Smashing Kit', cost: 1600, looks: 2, desc: '+2 Looks' },
-  hairline: { id: 'hairline', name: '💇 Hair Transplant', cost: 3200, looks: 3, desc: '+3 Looks' },
-  jaw: { id: 'jaw', name: '💉 Jawline Filler', cost: 5200, looks: 4, desc: '+4 Looks' },
-  canthal: { id: 'canthal', name: '👁️ Canthal Tilt Surgery', cost: 10000, looks: 6, desc: '+6 Looks' },
+  mewing: { id: 'mewing', name: '💋 Mewing Course', cost: 750, looks: 1, desc: '+1 Face Looks' },
+  bonesmash: { id: 'bonesmash', name: '🔨 Bone Smashing Kit', cost: 2400, looks: 1, desc: '+1 Face Looks' },
+  hairline: { id: 'hairline', name: '💇 Hair Transplant', cost: 4800, looks: 2, desc: '+2 Face Looks' },
+  jaw: { id: 'jaw', name: '💉 Jawline Filler', cost: 7800, looks: 2, desc: '+2 Face Looks' },
+  canthal: { id: 'canthal', name: '👁️ Canthal Tilt Surgery', cost: 15000, looks: 4, desc: '+4 Face Looks' },
   limblength: { id: 'limblength', name: '🦴 Limb Lengthening Surgery', cost: 12000, height: 1, speed: 1, desc: '+1" Height, +1 Speed' },
 };
+const MAXX_COMPLETE_MULTIPLIER = 1.25; // ongoing passive Good Hustle pay bonus once all 6 items are owned
+function isMaxxComplete(character) {
+  return Object.keys(MAXX_ITEMS_BY_ID).every((id) => (character.maxxPurchased || []).includes(id));
+}
 
 const SUITS = ['♠', '♥', '♦', '♣'];
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -222,8 +256,47 @@ function randFloat(min, max) {
   return Math.random() * (max - min) + min;
 }
 
+// Rounds to 2 decimals *before* clamping -- without this, repeated round2()-ed increments summed
+// onto a stat over time drift into float noise (e.g. 11.555553333333), which then flows straight
+// into combat HP math/display with no further cleanup. Rounding at the source fixes every
+// downstream reader in one place instead of patching each display site individually.
 function clampStat(v) {
-  return Math.max(0, Math.min(STAT_CAP, v));
+  return Math.max(0, Math.min(STAT_CAP, Math.round(v * 100) / 100));
+}
+
+function ensureGymBodyState(character) {
+  if (!character.gym) character.gym = {};
+  if (!character.gym.bodyExercises) {
+    character.gym.bodyExercises = {};
+    BODY_PARTS.forEach((part) => {
+      character.gym.bodyExercises[part] = { ex1: 0, ex2: 0, ex3: 0, ex4: 0 };
+    });
+  }
+  return character.gym.bodyExercises;
+}
+
+function bodyPartAvg(exercises) {
+  return (exercises.ex1 + exercises.ex2 + exercises.ex3 + exercises.ex4) / 4;
+}
+
+// Body score: average of the 5 body-part averages, scaled to fill its 90% share of Looks.
+function computeBodyLooksScore(character) {
+  const exercises = ensureGymBodyState(character);
+  const partAvg = BODY_PARTS.reduce((sum, part) => sum + bodyPartAvg(exercises[part]), 0) / BODY_PARTS.length;
+  return (partAvg / STAT_CAP) * STAT_CAP * BODY_LOOKS_WEIGHT;
+}
+
+// Face score: sum of purchased Maxx items' looks values -- MAXX_ITEMS_BY_ID is calibrated so a full
+// set sums to exactly STAT_CAP * FACE_LOOKS_WEIGHT (10).
+function computeFaceLooksScore(character) {
+  const purchased = character.maxxPurchased || [];
+  return Object.values(MAXX_ITEMS_BY_ID).reduce((sum, item) => (
+    purchased.includes(item.id) && item.looks ? sum + item.looks : sum
+  ), 0);
+}
+
+function recomputeLooks(character) {
+  character.stats.looks = clampStat(computeBodyLooksScore(character) + computeFaceLooksScore(character));
 }
 
 function round1(v) {
@@ -322,7 +395,8 @@ function newCharacter(firstName, lastName) {
     lastName,
     stats: { health: 10, attack: 10, speed: 10, defense: 10, looks: 10 },
     height: 65,
-    weightGained: 0,
+    fatGained: 0,
+    muscleGained: 0,
     cash: 0,
     chips: 0,
     alliance: 50,
@@ -334,11 +408,19 @@ function newCharacter(firstName, lastName) {
       ...Object.fromEntries(DEALER_TIER_IDS.map((id) => [`dealer_${id}`, 0])),
       ...Object.fromEntries(CRIME_TIER_IDS.map((id) => [`crime_${id}`, 0])),
     },
-    gym: { steroidTier: null, roidJailClicksRemaining: 0 },
+    gym: {
+      steroidTier: null,
+      roidJailClicksRemaining: 0,
+      bodyExercises: BODY_PARTS.reduce((acc, part) => {
+        acc[part] = { ex1: 0, ex2: 0, ex3: 0, ex4: 0 };
+        return acc;
+      }, {}),
+    },
     jail: { inJail: false, crime: null, yearsRemaining: 0, serving: false, contrabandAtkBonus: 0 },
     settings: { hideMilosWarning: false },
     titles: { owned: [], equipped: null, customTitles: [] },
-    marriage: { proposedTo: null, spouseName: null },
+    achievements: { foodEaten: 0, slutCount: 0 },
+    marriage: { proposedTo: null, spouseName: null, spouseUserId: null },
     licenses: { gunSafety: false, concealedPermit: false, concealedPendingUntil: 0 },
     inventory: [],
     equipment: { helmet: null, chest: null, pants: null, feet: null, holsterL: null, holsterR: null, openCarry: null, melee: null },
@@ -373,10 +455,65 @@ function ensureCombatState(character) {
   return character.combat;
 }
 
+function ensureAchievementsState(character) {
+  if (!character.achievements) character.achievements = { foodEaten: 0, slutCount: 0 };
+  return character.achievements;
+}
+
+// Migrates the old single weightGained field into the fat/muscle split -- existing fuel carries
+// over as fat (that's what it always represented: unburned calories from eating), muscle starts at 0.
+function ensureWeightState(character) {
+  if (character.fatGained === undefined) {
+    character.fatGained = character.weightGained || 0;
+    character.muscleGained = 0;
+    delete character.weightGained;
+  }
+}
+
 function getRemainingCooldown(character, key, durationMs = COOLDOWN_MS) {
   const last = character.cooldowns[key] || 0;
   const remaining = durationMs - (Date.now() - last);
   return remaining > 0 ? remaining : 0;
+}
+
+// Flavor-text pools for the three Da Skreetz hustles -- one random line per success, replacing
+// the old bland "${job}: +$X" message. Slut lines also take a {player} placeholder, filled with a
+// random other real account's name (getRandomOtherUserCharacterName in db.js) so it reads like
+// something actually happened to someone in the city, not just a number going up.
+const WORK_FLAVOR_LINES = [
+  'Worker bee ass, you just earned like ${amount}!',
+  'Brahhh at the 9-5 again. WORKER BEE made ${amount}!',
+  'Bro is allergic to real bread. Take this measly ${amount}.',
+  'Haha, clock out jimbo, take your ${amount}.',
+];
+const SLUT_FLAVOR_LINES = [
+  'You just gagged on {player}, and they paid you ${amount}.',
+  'INSANE VARIETY, you rode {player} for ${amount}.',
+  'BRAHHH, please stop gobblin on {player} and take ${amount}.',
+  'MEAT RIDER! You saddled up {player} for ${amount}.',
+];
+const CRIME_FLAVOR_LINES = [
+  'YOU HITTA LICK ON EM FOR ${amount}!!!',
+  'FINESSER!!! Walked off the plug w/ ${amount}!!!',
+  'You hit an Amazon DNA for ${amount}...DAT SHIT NEVER CAME.',
+  'Walked em down like 10 toe!!! Ran off da opp for ${amount}.',
+];
+
+// Achievement titles: earned automatically, not purchased -- server only needs the id string
+// (matching the client's hardcoded title catalog in core.js), same as any other titles.owned
+// entry (e.g. PEAK_TITLE's client-side auto-grant).
+const FAT_FUCK_THRESHOLD = 10000;
+const LOOSE_TITLE_THRESHOLD = 500;
+
+function maybeGrantAchievementTitle(character, titleId, thresholdMet) {
+  if (!thresholdMet || character.titles.owned.includes(titleId)) return null;
+  character.titles.owned.push(titleId);
+  return { message: '🏅 Achievement unlocked -- new title added to your Inventory!', cls: 'gain' };
+}
+
+function pickFlavorLine(pool, amount, playerName) {
+  const line = pool[randInt(0, pool.length - 1)];
+  return line.replace('${amount}', `$${amount}`).replace('{player}', playerName || '');
 }
 
 // Mirrors the client's doHustle('work') branch exactly, but takes character as a parameter
@@ -392,11 +529,12 @@ function doWork(character) {
   character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
   character.cooldowns.work = Date.now();
 
-  return { ok: true, message: `Worked a shift: +${gain} Floydbucks.`, cls: 'gain', character };
+  return { ok: true, message: pickFlavorLine(WORK_FLAVOR_LINES, gain), cls: 'gain', character };
 }
 
-// Mirrors the client's doHustle('slut') branch exactly.
-function doSlut(character) {
+// Mirrors the client's doHustle('slut') branch exactly. `otherPlayerName` is looked up by the
+// route (getRandomOtherUserCharacterName in db.js) since gameLogic.js has no DB access of its own.
+function doSlut(character, otherPlayerName) {
   const remaining = getRemainingCooldown(character, 'slut', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
@@ -406,12 +544,16 @@ function doSlut(character) {
   const gain = randInt(5, 60);
   character.cash += gain;
   character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF_MINOR);
-  messages.push({ message: `Turned a trick: +${gain} Floydbucks.`, cls: 'gain' });
+  messages.push({ message: pickFlavorLine(SLUT_FLAVOR_LINES, gain, otherPlayerName), cls: 'gain' });
   if (Math.random() < 0.3) {
     character.cash = Math.max(0, character.cash - gain);
     messages.push({ message: `You got robbed! -${gain} Floydbucks.`, cls: 'loss' });
   }
   character.cooldowns.slut = Date.now();
+  const achievements = ensureAchievementsState(character);
+  achievements.slutCount += 1;
+  const grantedTitle = maybeGrantAchievementTitle(character, 'looseTitle', achievements.slutCount >= LOOSE_TITLE_THRESHOLD);
+  if (grantedTitle) messages.push(grantedTitle);
 
   return { ok: true, messages, character };
 }
@@ -446,19 +588,20 @@ function doCrime(character) {
   character.cash += gain;
   character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
 
-  return { ok: true, messages: [{ message: `Pulled off a crime: +${gain} Floydbucks.`, cls: 'gain' }], jailed: false, character };
+  return { ok: true, messages: [{ message: pickFlavorLine(CRIME_FLAVOR_LINES, gain), cls: 'gain' }], jailed: false, character };
 }
 
-// Mirrors the client's doWorkout() exactly. No cooldown -- gated by fuel (weightGained) and cash
+// Mirrors the client's doWorkout() exactly. No cooldown -- gated by fuel (fatGained) and cash
 // only, same as the client.
 function doWorkout(character) {
+  ensureWeightState(character);
   const tier = character.gym.steroidTier ? STEROID_TIERS_BY_ID[character.gym.steroidTier] : null;
   const cost = GYM_COST * (tier ? tier.mult : 1);
-  if (character.weightGained < GYM_BURN_LBS) return { ok: false, reason: 'Not enough fuel -- eat at Pete\'sza first.' };
+  if (character.fatGained < GYM_BURN_LBS) return { ok: false, reason: 'Not enough fuel -- eat at Pete\'sza first.' };
   if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
 
   character.cash -= cost;
-  character.weightGained = Math.max(0, character.weightGained - GYM_BURN_LBS);
+  character.fatGained = Math.max(0, character.fatGained - GYM_BURN_LBS);
 
   if (character.gym.roidJailClicksRemaining > 0) {
     character.gym.roidJailClicksRemaining -= 1;
@@ -469,11 +612,58 @@ function doWorkout(character) {
     return { ok: true, message: `${tier.name} backfired! Thrown into Roid Jail for ${tier.jailClicks} clicks.`, cls: 'loss', character };
   }
   const mult = tier ? tier.mult : 1;
-  const looksGain = GYM_LOOKS_GAIN * mult;
   const speedGain = GYM_SPEED_GAIN * mult;
-  character.stats.looks = clampStat(character.stats.looks + looksGain);
+  // Fat burns fast (the full GYM_BURN_LBS above); muscle builds slowly off the back of it.
+  const muscleGain = GYM_BURN_LBS * MUSCLE_GAIN_RATIO * mult;
+  character.muscleGained += muscleGain;
+  const defenseGain = muscleGain * DEFENSE_PER_LB;
   character.stats.speed = clampStat(character.stats.speed + speedGain);
-  return { ok: true, message: `Workout complete: +${round1(looksGain)} Looks, +${round1(speedGain)} Speed.`, cls: 'gain', character };
+  character.stats.defense = clampStat(character.stats.defense + defenseGain);
+  return {
+    ok: true,
+    message: `Workout complete: +${round1(speedGain)} Speed, +${round2(muscleGain)} lbs Muscle, +${round1(defenseGain)} Defense.`,
+    cls: 'gain',
+    character,
+  };
+}
+
+// Mirrors the client's doBodyExercise() exactly. Trains one of a body part's 4 exercises (0-100
+// each); Looks is a derived stat, so it's recomputed from the exercise scores + Maxx items after
+// every train, never incremented directly.
+function doBodyExercise(character, bodyPart, exerciseKey) {
+  if (!BODY_PARTS.includes(bodyPart)) return { ok: false, reason: 'Unknown body part.' };
+  if (!BODY_EXERCISE_KEYS.includes(exerciseKey)) return { ok: false, reason: 'Unknown exercise.' };
+
+  const cooldownKey = `bodyExercise_${bodyPart}_${exerciseKey}`;
+  const remaining = getRemainingCooldown(character, cooldownKey, BODY_EXERCISE_COOLDOWN_MS);
+  if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
+
+  character.cooldowns[cooldownKey] = Date.now();
+  const exercises = ensureGymBodyState(character);
+  const gain = round2(randFloat(BODY_EXERCISE_TRAIN_MIN, BODY_EXERCISE_TRAIN_MAX));
+  exercises[bodyPart][exerciseKey] = clampStat(exercises[bodyPart][exerciseKey] + gain);
+  recomputeLooks(character);
+  return { ok: true, message: `Trained ${bodyPart} (${exerciseKey}): +${gain.toFixed(2)}.`, cls: 'gain', character };
+}
+
+// Trades muscle mass for height -- costs 30% of current Muscle, so it's only worth doing once
+// you've built up a real muscle base from workouts.
+function doStretchForHeight(character) {
+  ensureWeightState(character);
+  const remaining = getRemainingCooldown(character, 'stretchHeight', STRETCH_HEIGHT_COOLDOWN_MS);
+  if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
+  if (character.muscleGained <= 0) return { ok: false, reason: 'Not enough Muscle -- hit the gym first.' };
+
+  character.cooldowns.stretchHeight = Date.now();
+  const cost = round2(character.muscleGained * STRETCH_HEIGHT_MUSCLE_PCT);
+  character.muscleGained = round2(Math.max(0, character.muscleGained - cost));
+  character.height += STRETCH_HEIGHT_GAIN_IN;
+  return {
+    ok: true,
+    message: `Stretched for height: -${cost} lbs Muscle, +${STRETCH_HEIGHT_GAIN_IN}" Height.`,
+    cls: 'gain',
+    character,
+  };
 }
 
 // Mirrors the client's doSetSteroidTier() exactly -- just a free toggle, no cash/cooldown involved.
@@ -497,6 +687,7 @@ function doRoidEscape(character) {
 
 // Mirrors the client's doBuyFood() exactly.
 function doBuyFood(character, itemId) {
+  ensureWeightState(character);
   const item = FOOD_ITEMS_BY_ID[itemId];
   if (!item) return { ok: false, reason: 'Unknown food item.' };
 
@@ -505,13 +696,19 @@ function doBuyFood(character, itemId) {
 
   character.cash -= cost;
   const lbs = item.calories / CALORIES_PER_LB;
-  character.weightGained += lbs;
-  character.stats.defense = clampStat(character.stats.defense + lbs * DEFENSE_PER_LB);
+  character.fatGained += lbs;
   character.stats.speed = clampStat(character.stats.speed - lbs * SPEED_LOSS_PER_LB);
+
+  const achievements = ensureAchievementsState(character);
+  achievements.foodEaten += 1;
+  const grantedTitle = maybeGrantAchievementTitle(character, 'fatFuck', achievements.foodEaten >= FAT_FUCK_THRESHOLD);
+
   return {
     ok: true,
-    message: `Ate a ${item.name}: +${round1(lbs)} lbs, +${round1(lbs * DEFENSE_PER_LB)} Defense, -${round1(lbs * SPEED_LOSS_PER_LB)} Speed.`,
-    cls: 'loss',
+    messages: [
+      { message: `Ate a ${item.name}: +${round1(lbs)} lbs Fat (fuel for the gym), -${round1(lbs * SPEED_LOSS_PER_LB)} Speed.`, cls: 'loss' },
+      ...(grantedTitle ? [grantedTitle] : []),
+    ],
     character,
   };
 }
@@ -528,9 +725,9 @@ function doBuyMaxx(character, itemId) {
 
   character.cash -= item.cost;
   character.maxxPurchased.push(itemId);
-  if (item.looks) character.stats.looks = clampStat(character.stats.looks + item.looks);
   if (item.speed) character.stats.speed = clampStat(character.stats.speed + item.speed);
   if (item.height) character.height += item.height;
+  recomputeLooks(character);
   return { ok: true, message: `Purchased ${item.name}: ${item.desc}.`, cls: 'gain', character };
 }
 
@@ -942,14 +1139,18 @@ function doGoodJobWork(character, skillKey) {
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
   const ceoActive = goodJobSkillAvg(character) >= GOOD_CEO_MIN_AVG && character.alliance <= COMBAT_GOOD_MAX_ALLIANCE;
-  const gain = round2(randFloat(rank.payMin, rank.payMax) * (ceoActive ? GOOD_CEO_MULTIPLIER : 1));
+  const maxxActive = isMaxxComplete(character);
+  const gain = round2(randFloat(rank.payMin, rank.payMax)
+    * (ceoActive ? GOOD_CEO_MULTIPLIER : 1)
+    * (maxxActive ? MAXX_COMPLETE_MULTIPLIER : 1));
   character.cash = round2(character.cash + gain);
   const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * goodJobSkillTrainMult(character);
   character.jobs.skills[skillKey] = clampStat(character.jobs.skills[skillKey] + skillGain);
   character.cooldowns[cooldownKey] = Date.now();
   character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
 
-  const messages = [{ message: `${job.name}: +$${gain.toFixed(2)}${ceoActive ? ' (👔 CEO Bonus)' : ''}.`, cls: 'gain' }];
+  const bonusNote = `${ceoActive ? ' (👔 CEO Bonus)' : ''}${maxxActive ? ' (💈 Maxxed Bonus)' : ''}`;
+  const messages = [{ message: `${job.name}: +$${gain.toFixed(2)}${bonusNote}.`, cls: 'gain' }];
   if (job.id === 'pizza' && !character.jobs.pizzaPerkGranted && goodJobPerkActive(character, 'pizza')) {
     character.stats.speed = clampStat(character.stats.speed + 2);
     character.jobs.pizzaPerkGranted = true;
@@ -1196,10 +1397,12 @@ function combatItemDef(itemId) {
 }
 
 function pickOpponentPool(character) {
-  if (character.alliance <= COMBAT_GOOD_MAX_ALLIANCE) return ['gangster', 'thug'];
-  if (character.alliance >= GUZMAN_MIN_ALLIANCE) return ['citizen', 'cop'];
-  return ['citizen', 'cop', 'thug', 'gangster'];
+  if (character.alliance <= COMBAT_GOOD_MAX_ALLIANCE) return ['gangster', 'thug', 'gangbanger', 'goon'];
+  if (character.alliance >= GUZMAN_MIN_ALLIANCE) return ['citizen', 'cop', 'vagabond', 'miscreant'];
+  return ['citizen', 'cop', 'thug', 'gangster', 'goon', 'gangbanger', 'vagabond', 'miscreant'];
 }
+
+const GOOD_FIGHT_NPC_KEYS = new Set(['gangster', 'thug', 'gangbanger', 'goon']);
 
 function heightHpBonus(character) {
   return Math.round(Math.max(0, character.height - 65) * 0.4);
@@ -1246,7 +1449,7 @@ function doStartFight(character) {
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
   const pool = pickOpponentPool(character);
-  const key = pool[randInt(0, pool.length - 1)];
+  const key = Math.random() < MILOS_BOSS_CHANCE ? 'milos' : pool[randInt(0, pool.length - 1)];
   const npc = NPC_TYPES[key];
   const maxHp = character.stats.health + heightHpBonus(character) + gearStatBonus(character, 'health');
   character.combat = {
@@ -1324,7 +1527,7 @@ function doEnemyAttack(character) {
 function doWinCombat(character, npc, activeModifier) {
   const reward = randInt(npc.minReward, npc.maxReward) * (activeModifier === 'riot' ? 2 : 1);
   character.cash += reward;
-  const wasGoodFight = character.combat.enemyKey === 'gangster' || character.combat.enemyKey === 'thug';
+  const wasGoodFight = GOOD_FIGHT_NPC_KEYS.has(character.combat.enemyKey);
   character.alliance = clampStat(wasGoodFight ? character.alliance - ALLIANCE_BUFF : character.alliance + ALLIANCE_DEBUFF);
   character.combat.active = false;
   character.combat.turn = null;
@@ -1538,8 +1741,8 @@ function doJailWorkout(character) {
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
   character.cooldowns.jailWorkout = Date.now();
-  const atkGain = round2(randFloat(JAIL_WORKOUT_GAIN_MIN, JAIL_WORKOUT_GAIN_MAX));
-  const defGain = round2(randFloat(JAIL_WORKOUT_GAIN_MIN, JAIL_WORKOUT_GAIN_MAX));
+  const atkGain = round2(randFloat(JAIL_WORKOUT_ATK_GAIN_MIN, JAIL_WORKOUT_ATK_GAIN_MAX));
+  const defGain = round2(randFloat(JAIL_WORKOUT_DEF_GAIN_MIN, JAIL_WORKOUT_DEF_GAIN_MAX));
   character.stats.attack = clampStat(character.stats.attack + atkGain);
   character.stats.defense = clampStat(character.stats.defense + defGain);
   return { ok: true, message: `Yard workout: +${atkGain.toFixed(2)} Attack, +${defGain.toFixed(2)} Defense.`, cls: 'gain', character };
@@ -1562,7 +1765,9 @@ function doJailFight(character) {
 
   if (Math.random() < winChance) {
     const stat = Math.random() < 0.5 ? 'attack' : 'defense';
-    const amount = round2(randFloat(JAIL_FIGHT_STAT_GAIN_MIN, JAIL_FIGHT_STAT_GAIN_MAX));
+    const amount = stat === 'attack'
+      ? round2(randFloat(JAIL_FIGHT_ATK_GAIN_MIN, JAIL_FIGHT_ATK_GAIN_MAX))
+      : round2(randFloat(JAIL_FIGHT_DEF_GAIN_MIN, JAIL_FIGHT_DEF_GAIN_MAX));
     character.stats[stat] = clampStat(character.stats[stat] + amount);
     const label = stat === 'attack' ? 'Attack' : 'Defense';
     return { ok: true, won: true, message: `You won the yard fight! +${amount.toFixed(2)} ${label}${bonusNote}.`, cls: 'gain', character };
@@ -1606,14 +1811,6 @@ function doCityHallRename(character, first, last) {
   character.firstName = first;
   character.lastName = last;
   return { ok: true, message: `Name legally changed to ${first} ${last}.`, cls: 'gain', character };
-}
-
-// Mirrors the client's doMarriagePropose() exactly -- no real recipient handshake yet (that needs
-// the other player's account, not just their name), same as before this was ported.
-function doMarriagePropose(character, name) {
-  if (!name) return { ok: false, reason: 'Enter a username.' };
-  character.marriage.proposedTo = name;
-  return { ok: true, message: `Proposal sent to ${name}. They'll see it in their City Hall once multiplayer is live.`, cls: 'gain', character };
 }
 
 // Mirrors the client's doGunSafetyResult() exactly. The quiz question bank (with answers) still
@@ -1829,7 +2026,6 @@ module.exports = {
   doJailFight,
   doBuyContraband,
   doCityHallRename,
-  doMarriagePropose,
   doGunSafetyResult,
   doRangeShoot,
   doRangeDraw,
@@ -1846,5 +2042,16 @@ module.exports = {
   buildLeaderboardBoard,
   getRemainingCooldown,
   round2,
+  clampStat,
+  NPC_TYPES,
   COOLDOWN_MS,
+  doBodyExercise,
+  recomputeLooks,
+  computeBodyLooksScore,
+  computeFaceLooksScore,
+  isMaxxComplete,
+  BODY_PARTS,
+  BODY_EXERCISE_KEYS,
+  doStretchForHeight,
+  ensureWeightState,
 };

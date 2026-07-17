@@ -6,6 +6,7 @@ const cors = require('cors');
 const {
   createUser,
   getUserByUsername,
+  getRandomOtherUserCharacterName,
   getUserById,
   saveCharacter,
   getOnlineUsers,
@@ -35,6 +36,11 @@ const {
   getActiveDuelForUser,
   getPendingOrActiveDuelForUser,
   updateDuel,
+  createMarriageProposal,
+  getMarriageProposalById,
+  getPendingMarriageProposalForTarget,
+  getPendingOrAcceptedProposalForUser,
+  updateMarriageProposal,
   createCoinflipLobby,
   getOpenCoinflipLobbies,
   getCoinflipLobbyById,
@@ -68,6 +74,8 @@ const {
   doWorkout,
   doSetSteroidTier,
   doRoidEscape,
+  doBodyExercise,
+  doStretchForHeight,
   doBuyFood,
   doBuyMaxx,
   doBuyChips,
@@ -117,7 +125,6 @@ const {
   doJailFight,
   doBuyContraband,
   doCityHallRename,
-  doMarriagePropose,
   doGunSafetyResult,
   doRangeShoot,
   doRangeDraw,
@@ -290,7 +297,10 @@ app.get('/players/online', requireAuth, (req, res) => {
   const pending = getPendingDuelForTarget(req.user.sub);
   const pendingDuelChallenge = pending ? { id: pending.id, attackerName: pending.attacker_name } : null;
 
-  res.json({ ok: true, players, pendingDuelChallenge });
+  const pendingMarriage = getPendingMarriageProposalForTarget(req.user.sub);
+  const pendingMarriageProposal = pendingMarriage ? { id: pendingMarriage.id, proposerName: pendingMarriage.proposer_name } : null;
+
+  res.json({ ok: true, players, pendingDuelChallenge, pendingMarriageProposal });
 });
 
 // New Milos City presence. Separate from last_seen (which just means "the app is open,
@@ -713,7 +723,7 @@ function runAction(req, res, actionFn, ...args) {
 }
 
 app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork));
-app.post('/hustle/slut', requireAuth, (req, res) => runAction(req, res, doSlut));
+app.post('/hustle/slut', requireAuth, (req, res) => runAction(req, res, doSlut, getRandomOtherUserCharacterName(req.user.sub)));
 app.post('/hustle/crime', requireAuth, (req, res) => runAction(req, res, doCrime));
 
 app.post('/gym/workout', requireAuth, (req, res) => runAction(req, res, doWorkout));
@@ -722,6 +732,11 @@ app.post('/gym/steroid-tier', requireAuth, (req, res) => {
   runAction(req, res, doSetSteroidTier, tierId ?? null);
 });
 app.post('/gym/roid-escape', requireAuth, (req, res) => runAction(req, res, doRoidEscape));
+app.post('/gym/exercise', requireAuth, (req, res) => {
+  const { bodyPart, exerciseKey } = req.body || {};
+  runAction(req, res, doBodyExercise, bodyPart, exerciseKey);
+});
+app.post('/gym/stretch-height', requireAuth, (req, res) => runAction(req, res, doStretchForHeight));
 
 app.post('/market/food', requireAuth, (req, res) => {
   const { itemId } = req.body || {};
@@ -847,7 +862,73 @@ app.post('/cityhall/rename', requireAuth, (req, res) => {
 });
 app.post('/cityhall/propose', requireAuth, (req, res) => {
   const { name } = req.body || {};
-  runAction(req, res, doMarriagePropose, name);
+  const targetUser = name ? getUserByUsername(name) : null;
+  if (!targetUser) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (targetUser.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't propose to yourself." });
+
+  const proposerUser = getUserById(req.user.sub);
+  const proposerCharacter = JSON.parse(proposerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  if (proposerCharacter.marriage.spouseUserId) return res.status(429).json({ ok: false, reason: 'You are already married.' });
+  if (targetCharacter.marriage.spouseUserId) return res.status(429).json({ ok: false, reason: 'That player is already married.' });
+  if (getPendingOrAcceptedProposalForUser(req.user.sub)) {
+    return res.status(429).json({ ok: false, reason: 'You already have a proposal pending.' });
+  }
+  if (getPendingOrAcceptedProposalForUser(targetUser.id)) {
+    return res.status(429).json({ ok: false, reason: 'That player already has a proposal pending.' });
+  }
+
+  const proposalId = createMarriageProposal(
+    proposerUser.id,
+    `${proposerCharacter.firstName} ${proposerCharacter.lastName}`,
+    targetUser.id,
+    `${targetCharacter.firstName} ${targetCharacter.lastName}`
+  );
+  proposerCharacter.marriage.proposedTo = `${targetCharacter.firstName} ${targetCharacter.lastName}`;
+  saveCharacter(proposerUser.id, proposerCharacter);
+  res.json({
+    ok: true,
+    proposalId,
+    message: `Proposal sent to ${targetCharacter.firstName} ${targetCharacter.lastName}.`,
+    cls: 'gain',
+    character: proposerCharacter,
+  });
+});
+app.post('/cityhall/respond', requireAuth, (req, res) => {
+  const { proposalId, accept } = req.body || {};
+  const proposal = getMarriageProposalById(proposalId);
+  if (!proposal) return res.status(404).json({ ok: false, reason: 'Proposal not found.' });
+  if (proposal.target_user_id !== req.user.sub) return res.status(403).json({ ok: false, reason: 'This proposal is not yours to answer.' });
+  if (proposal.status !== 'pending') return res.status(429).json({ ok: false, reason: 'This proposal is no longer pending.' });
+
+  if (!accept) {
+    updateMarriageProposal(proposal.id, { status: 'declined' });
+    const proposerUser = getUserById(proposal.proposer_user_id);
+    if (proposerUser) {
+      const proposerCharacter = JSON.parse(proposerUser.character_json);
+      proposerCharacter.marriage.proposedTo = null;
+      saveCharacter(proposerUser.id, proposerCharacter);
+    }
+    return res.json({ ok: true, accepted: false });
+  }
+
+  const proposerUser = getUserById(proposal.proposer_user_id);
+  const targetUser = getUserById(proposal.target_user_id);
+  if (!proposerUser || !targetUser) return res.status(404).json({ ok: false, reason: 'A participant no longer exists.' });
+  const proposerCharacter = JSON.parse(proposerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+
+  proposerCharacter.marriage.spouseUserId = targetUser.id;
+  proposerCharacter.marriage.spouseName = `${targetCharacter.firstName} ${targetCharacter.lastName}`;
+  proposerCharacter.marriage.proposedTo = null;
+  targetCharacter.marriage.spouseUserId = proposerUser.id;
+  targetCharacter.marriage.spouseName = `${proposerCharacter.firstName} ${proposerCharacter.lastName}`;
+  targetCharacter.marriage.proposedTo = null;
+  saveCharacter(proposerUser.id, proposerCharacter);
+  saveCharacter(targetUser.id, targetCharacter);
+
+  updateMarriageProposal(proposal.id, { status: 'accepted' });
+  res.json({ ok: true, accepted: true, character: targetCharacter });
 });
 app.post('/cityhall/gun-safety-result', requireAuth, (req, res) => {
   const { passed } = req.body || {};

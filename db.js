@@ -203,8 +203,20 @@ function createUser(username, passwordHash, character) {
   return info.lastInsertRowid;
 }
 
+// Case-insensitive so "Bob"/"bob"/"BOB" are the same account for both login and the registration
+// uniqueness check (both already call this function) -- original casing is preserved as typed at
+// registration for display, this only affects matching.
 function getUserByUsername(username) {
-  return db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  return db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(username);
+}
+
+// Picks a random other account's in-game name for flavor text (e.g. Slut hustle messages) --
+// falls back to a generic placeholder if this is the only account that exists yet.
+function getRandomOtherUserCharacterName(excludeUserId) {
+  const row = db.prepare('SELECT character_json FROM users WHERE id != ? ORDER BY RANDOM() LIMIT 1').get(excludeUserId);
+  if (!row) return 'a rando';
+  const c = JSON.parse(row.character_json);
+  return `${c.firstName} ${c.lastName}`;
 }
 
 function getUserById(id) {
@@ -258,6 +270,52 @@ db.exec(`
     created_at INTEGER NOT NULL
   );
 `);
+
+// Real marriage handshake -- mirrors the duels table's pending/respond shape, minus the combat
+// fields duels needs. "accepted" is permanent for now; divorce is out of scope.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS marriage_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposer_user_id INTEGER NOT NULL,
+    proposer_name TEXT NOT NULL,
+    target_user_id INTEGER NOT NULL,
+    target_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+function createMarriageProposal(proposerId, proposerName, targetId, targetName) {
+  const stmt = db.prepare(
+    'INSERT INTO marriage_proposals (proposer_user_id, proposer_name, target_user_id, target_name, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const info = stmt.run(proposerId, proposerName, targetId, targetName, 'pending', Date.now());
+  return info.lastInsertRowid;
+}
+
+function getMarriageProposalById(id) {
+  return db.prepare('SELECT * FROM marriage_proposals WHERE id = ?').get(id);
+}
+
+function getPendingMarriageProposalForTarget(targetId) {
+  return db.prepare("SELECT * FROM marriage_proposals WHERE target_user_id = ? AND status = 'pending'").get(targetId);
+}
+
+function getPendingOrAcceptedProposalForUser(userId) {
+  return db
+    .prepare(
+      "SELECT * FROM marriage_proposals WHERE status IN ('pending', 'accepted') AND (proposer_user_id = ? OR target_user_id = ?)"
+    )
+    .get(userId, userId);
+}
+
+function updateMarriageProposal(id, fields) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const setClause = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  db.prepare(`UPDATE marriage_proposals SET ${setClause} WHERE id = ?`).run(...values, id);
+}
 
 function createDuelChallenge(attackerId, attackerName, targetId, targetName) {
   const now = Date.now();
@@ -514,6 +572,7 @@ module.exports = {
   db,
   createUser,
   getUserByUsername,
+  getRandomOtherUserCharacterName,
   getUserById,
   saveCharacter,
   touchLastSeen,
@@ -543,6 +602,11 @@ module.exports = {
   getActiveDuelForUser,
   getPendingOrActiveDuelForUser,
   updateDuel,
+  createMarriageProposal,
+  getMarriageProposalById,
+  getPendingMarriageProposalForTarget,
+  getPendingOrAcceptedProposalForUser,
+  updateMarriageProposal,
   createCoinflipLobby,
   getOpenCoinflipLobbies,
   getCoinflipLobbyById,
