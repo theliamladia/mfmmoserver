@@ -1511,6 +1511,22 @@ app.post('/casino/table/roulette/bet', requireAuth, (req, res) => {
   res.json({ ok: true, character, lastRoundResult: advanced.lastRoundResult, ...serializeCasinoTable(advanced.table, advanced.seats) });
 });
 
+// Safety net: an uncaught throw inside any route handler (sync or via next(err)) used to crash the
+// whole process, taking down every player's session until PM2 restarted it -- see the casino
+// seat-taking race that did exactly this. This must be registered after every route.
+app.use((err, req, res, next) => {
+  console.error('Unhandled route error:', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ ok: false, reason: 'Something went wrong. Please try again.' });
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (server staying up):', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection (server staying up):', err);
+});
+
 app.listen(PORT, () => {
   console.log(`mfmmoalpha-server listening on port ${PORT}`);
 });

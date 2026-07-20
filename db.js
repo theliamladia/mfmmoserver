@@ -482,7 +482,10 @@ function getSeatsForTable(tableId) {
 }
 
 // Takes the lowest free seat index (0-4) for this user at this table, inside a transaction so a
-// 6th simultaneous joiner can't slip past the 5-seat cap.
+// 6th simultaneous joiner can't slip past the 5-seat cap. Two near-simultaneous joiners can still
+// both compute the same free seatIndex before either INSERTs (the SELECT and INSERT aren't a single
+// atomic statement) -- the UNIQUE(table_id, seat_index) constraint catches that at the DB layer, and
+// we treat it exactly like "table just filled up" rather than letting it throw and crash the process.
 const takeSeatTxn = db.transaction((tableId, userId, playerName) => {
   const taken = db
     .prepare('SELECT seat_index FROM casino_table_seats WHERE table_id = ? AND left_table = 0')
@@ -500,7 +503,14 @@ const takeSeatTxn = db.transaction((tableId, userId, playerName) => {
 });
 
 function takeSeat(tableId, userId, playerName) {
-  return takeSeatTxn(tableId, userId, playerName);
+  try {
+    return takeSeatTxn(tableId, userId, playerName);
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+      return null;
+    }
+    throw err;
+  }
 }
 
 function getSeatForUser(tableId, userId) {
