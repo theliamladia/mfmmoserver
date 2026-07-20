@@ -1149,10 +1149,16 @@ app.post('/penitentiary/commissary', requireAuth, (req, res) => {
 });
 
 // Matches the client's hardcoded admin password gate (js/admin.js) -- previously only enforced
-// client-side (trivially bypassable via devtools), now actually checked server-side too.
+// client-side (trivially bypassable via devtools), now actually checked server-side too. Also
+// restricted to a single allowed username -- req.user.username comes from the signed JWT (see
+// auth.js), so unlike a client-supplied value this can't be spoofed.
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'fishdoc15!';
+const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'mrleems').toLowerCase();
 
 function requireAdminPassword(req, res, next) {
+  if ((req.user?.username || '').toLowerCase() !== ADMIN_USERNAME) {
+    return res.status(403).json({ ok: false, reason: 'Not authorized.' });
+  }
   if (req.body?.adminPassword !== ADMIN_PASSWORD) {
     return res.status(403).json({ ok: false, reason: 'Incorrect admin password.' });
   }
