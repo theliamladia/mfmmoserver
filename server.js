@@ -26,6 +26,7 @@ const {
   getServerState,
   setServerPaused,
   setServerModifier,
+  setServerMaintenance,
   createChatMessage,
   getRecentChatMessages,
   touchMilosPresence,
@@ -701,6 +702,8 @@ app.get('/duels/:id', requireAuth, (req, res) => {
 // and other read-only views elsewhere stay current. Not a security boundary -- same as every
 // other client-driven mutation until it's ported to a real do<X>() endpoint like /hustle/work.
 app.post('/character/sync', requireAuth, (req, res) => {
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
   const { character } = req.body || {};
   if (!character || typeof character !== 'object') {
     return res.status(400).json({ ok: false, reason: 'Missing character.' });
@@ -713,6 +716,7 @@ app.post('/character/sync', requireAuth, (req, res) => {
 // the result if it succeeded. Every server-authoritative action route is this same shape.
 function runAction(req, res, actionFn, ...args) {
   if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
 
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
@@ -1160,8 +1164,18 @@ function requireAdminPassword(req, res, next) {
   next();
 }
 
-// Server state (pause + modifier) is public to any logged-in player -- everyone needs to see the
-// pause banner and active modifier, not just admins.
+// Maintenance mode blocks every server-authoritative action (and the trust-based sync) for
+// everyone except the admin account, so mrleems can still play/test while it's on. Referenced by
+// runAction and /character/sync above, both defined earlier in the file -- safe, since neither
+// handler runs until a request comes in, well after the whole module (including this) has loaded.
+const MAINTENANCE_MESSAGE = 'MAINTENANCE MODE - GAME IS BEING UPDATED - PLEASE FORWARD ALL COMPLAINTS TO NICK Q.';
+
+function isMaintenanceBlocked(req) {
+  return !!getServerState().maintenance && (req.user?.username || '').toLowerCase() !== ADMIN_USERNAME;
+}
+
+// Server state (pause + modifier + maintenance) is public to any logged-in player -- everyone
+// needs to see the pause/maintenance banner and active modifier, not just admins.
 app.get('/admin/state', requireAuth, (req, res) => {
   res.json({ ok: true, state: getServerState() });
 });
@@ -1175,6 +1189,12 @@ app.post('/admin/pause', requireAuth, requireAdminPassword, (req, res) => {
 app.post('/admin/modifier', requireAuth, requireAdminPassword, (req, res) => {
   const { modifier } = req.body || {};
   setServerModifier(modifier || null);
+  res.json({ ok: true, state: getServerState() });
+});
+
+app.post('/admin/maintenance', requireAuth, requireAdminPassword, (req, res) => {
+  const { maintenance } = req.body || {};
+  setServerMaintenance(!!maintenance);
   res.json({ ok: true, state: getServerState() });
 });
 

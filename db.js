@@ -54,8 +54,15 @@ db.prepare('INSERT OR IGNORE INTO server_state (id, paused, modifier) VALUES (1,
   }
 });
 
+// Maintenance mode: takes over every non-admin client's screen until the admin (see
+// ADMIN_USERNAME in server.js) turns it back off. Same single shared row and bolt-on-column
+// approach as the leaderboard fields above, since server_state already exists in production.
+if (!db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === 'maintenance')) {
+  db.exec('ALTER TABLE server_state ADD COLUMN maintenance INTEGER NOT NULL DEFAULT 0');
+}
+
 function getServerState() {
-  return db.prepare('SELECT paused, modifier FROM server_state WHERE id = 1').get();
+  return db.prepare('SELECT paused, modifier, maintenance FROM server_state WHERE id = 1').get();
 }
 
 function getLeaderboardState() {
@@ -84,6 +91,10 @@ function setServerPaused(paused) {
 
 function setServerModifier(modifier) {
   db.prepare('UPDATE server_state SET modifier = ? WHERE id = 1').run(modifier);
+}
+
+function setServerMaintenance(on) {
+  db.prepare('UPDATE server_state SET maintenance = ? WHERE id = 1').run(on ? 1 : 0);
 }
 
 // Milos Trading Network: a real shared table (unlike everything else, which lives inside a single
@@ -601,6 +612,7 @@ module.exports = {
   getServerState,
   setServerPaused,
   setServerModifier,
+  setServerMaintenance,
   createChatMessage,
   getRecentChatMessages,
   touchMilosPresence,
