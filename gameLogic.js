@@ -1391,7 +1391,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
     attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
     const bonusNotes = [tryInterceptFarmShipment(attacker, target), tryDrainCryptoWallet(attacker, target)].filter(Boolean);
     const message = `Robbed ${target.firstName} ${target.lastName} for $${gain.toFixed(2)} and got away clean.${bonusNotes.length ? ` ${bonusNotes.join(' ')}` : ''}`;
-    return { ok: true, jailed: false, message, cls: 'gain', attacker, target };
+    return { ok: true, jailed: false, message, cls: 'gain', attacker, target, gain };
   }
 
   const winChance = Math.max(0.15, Math.min(0.85, 0.5 + (attacker.stats.attack - target.stats.attack) * 0.015));
@@ -1408,6 +1408,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
       cls: 'gain',
       attacker,
       target,
+      gain,
     };
   }
 

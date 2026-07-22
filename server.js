@@ -63,6 +63,9 @@ const {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  createRobberyNotification,
+  getUnseenRobberyNotifications,
+  markRobberyNotificationsSeen,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
@@ -409,6 +412,19 @@ app.post('/notifications/payments/seen', requireAuth, (req, res) => {
   });
 });
 
+function serializeRobberyNotification(row) {
+  return { id: row.id, robberName: row.robber_name, amount: row.amount, createdAt: row.created_at };
+}
+
+app.get('/notifications/robberies', requireAuth, (req, res) => {
+  res.json({ ok: true, notifications: getUnseenRobberyNotifications(req.user.sub).map(serializeRobberyNotification) });
+});
+
+app.post('/notifications/robberies/seen', requireAuth, (req, res) => {
+  markRobberyNotificationsSeen(req.user.sub);
+  res.json({ ok: true });
+});
+
 app.get('/leaderboard', requireAuth, (req, res) => {
   const rows = getAllUsersForLeaderboard();
   const users = rows.map((r) => ({ id: r.id, username: r.username, character: JSON.parse(r.character_json) }));
@@ -440,6 +456,9 @@ app.post('/players/rob', requireAuth, (req, res) => {
 
   saveCharacter(attackerUser.id, attackerCharacter);
   saveCharacter(targetUser.id, targetCharacter);
+  if (result.gain) {
+    createRobberyNotification(targetUser.id, `${attackerCharacter.firstName} ${attackerCharacter.lastName}`, result.gain);
+  }
 
   res.json({ ok: true, jailed: result.jailed, message: result.message, cls: result.cls, character: attackerCharacter });
 });

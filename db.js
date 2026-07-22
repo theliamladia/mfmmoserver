@@ -589,6 +589,38 @@ function markPaymentNotificationsSeen(userId) {
   db.prepare('UPDATE payment_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
 }
 
+// Robbery notifications: same reasoning as payment_notifications -- the victim needs to learn
+// they were robbed even though they never triggered the request. Unlike payments (a quiet bell
+// badge), robberies pop an alert modal client-side, so the client fetches unseen rows directly
+// rather than a count.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS robbery_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER NOT NULL,
+    robber_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const ROBBERY_NOTIFICATION_LIMIT = 20;
+
+function createRobberyNotification(recipientUserId, robberName, amount) {
+  db.prepare(
+    'INSERT INTO robbery_notifications (recipient_user_id, robber_name, amount, created_at, seen) VALUES (?, ?, ?, ?, 0)'
+  ).run(recipientUserId, robberName, amount, Date.now());
+}
+
+function getUnseenRobberyNotifications(userId) {
+  return db
+    .prepare('SELECT * FROM robbery_notifications WHERE recipient_user_id = ? AND seen = 0 ORDER BY created_at ASC LIMIT ?')
+    .all(userId, ROBBERY_NOTIFICATION_LIMIT);
+}
+
+function markRobberyNotificationsSeen(userId) {
+  db.prepare('UPDATE robbery_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
+}
+
 // Altcoins: a real shared table, same reasoning as mtn_listings -- an altcoin's remaining-supply
 // count has to be visible to every player, not just its creator. Holdings live in a separate table
 // (one row per user per coin) so per-user qty/cost-basis stays queryable without ever exposing it
@@ -735,6 +767,9 @@ module.exports = {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  createRobberyNotification,
+  getUnseenRobberyNotifications,
+  markRobberyNotificationsSeen,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
