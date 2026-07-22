@@ -81,13 +81,13 @@ const {
 const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
   newCharacter,
+  resetCharacterKeepCosmetics,
   doWork,
   doSlut,
   doCrime,
   doWorkout,
   doSetSteroidTier,
   doRoidEscape,
-  doBodyExercise,
   doStretchForHeight,
   doBuyFood,
   doBuyMaxx,
@@ -148,6 +148,7 @@ const {
   doBuyListing,
   creditSellerForSale,
   round2,
+  round4,
   LEADERBOARD_TITLES,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
@@ -162,6 +163,7 @@ const {
   doBuyCryptoUpgrade,
   doCollectCrypto,
   doSellFC,
+  doBuyFC,
   ALTCOIN_SUPPLY,
   altcoinPriceAt,
   doMintAltcoin,
@@ -769,10 +771,6 @@ app.post('/gym/steroid-tier', requireAuth, (req, res) => {
   runAction(req, res, doSetSteroidTier, tierId ?? null);
 });
 app.post('/gym/roid-escape', requireAuth, (req, res) => runAction(req, res, doRoidEscape));
-app.post('/gym/exercise', requireAuth, (req, res) => {
-  const { bodyPart, exerciseKey } = req.body || {};
-  runAction(req, res, doBodyExercise, bodyPart, exerciseKey);
-});
 app.post('/gym/stretch-height', requireAuth, (req, res) => runAction(req, res, doStretchForHeight));
 
 app.post('/market/food', requireAuth, (req, res) => {
@@ -877,6 +875,10 @@ app.post('/crypto/collect', requireAuth, (req, res) => runAction(req, res, doCol
 app.post('/crypto/sell', requireAuth, (req, res) => {
   const { amount } = req.body || {};
   runAction(req, res, doSellFC, Number(amount));
+});
+app.post('/crypto/buy', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doBuyFC, Number(amount));
 });
 
 app.post('/jobs/good/apply', requireAuth, (req, res) => {
@@ -1194,7 +1196,7 @@ app.post('/altcoins/dump', requireAuth, (req, res) => {
   const character = JSON.parse(user.character_json);
   const crypto = ensureCryptoState(character);
   const { payoutFc, newPrice } = altcoinDumpPayout(coin, majority.qty);
-  crypto.fc = round2(crypto.fc + payoutFc);
+  crypto.fc = round4(crypto.fc + payoutFc);
   saveCharacter(user.id, character);
 
   zeroAltcoinHolding(majority.id);
@@ -1231,7 +1233,7 @@ app.post('/altcoins/buyout', requireAuth, (req, res) => {
     if (!holderUser) return;
     const holderCharacter = JSON.parse(holderUser.character_json);
     const crypto = ensureCryptoState(holderCharacter);
-    crypto.fc = round2(crypto.fc + payoutFc);
+    crypto.fc = round4(crypto.fc + payoutFc);
     saveCharacter(holderUser.id, holderCharacter);
   });
   holdings.forEach((h) => zeroAltcoinHolding(h.holdingId));
@@ -1412,6 +1414,18 @@ app.post('/admin/maintenance', requireAuth, requireAdminPassword, (req, res) => 
   const { maintenance } = req.body || {};
   setServerMaintenance(!!maintenance);
   res.json({ ok: true, state: getServerState() });
+});
+
+// Wipes every player's character back to newCharacter() defaults (stats, cash, chips, jobs, bank,
+// equipment, jail, Farms/Crypto/Altcoins state -- everything) but keeps titles and cosmetic
+// inventory stacks. Irreversible, so gated same as every other admin action.
+app.post('/admin/reset-all-stats', requireAuth, requireAdminPassword, (req, res) => {
+  const users = getAllUsersForLeaderboard();
+  users.forEach((row) => {
+    const character = JSON.parse(row.character_json);
+    saveCharacter(row.id, resetCharacterKeepCosmetics(character));
+  });
+  res.json({ ok: true, message: `Reset stats for ${users.length} player(s). Cosmetics kept.`, cls: 'gain' });
 });
 
 app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {

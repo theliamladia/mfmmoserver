@@ -36,13 +36,12 @@ const STEROID_TIERS_BY_ID = {
 };
 const ROID_ESCAPE_COST = GYM_COST * 4;
 
-// Body is 90% of Looks, Face (Maxx items, see MAXX_ITEMS_BY_ID) is the other 10%. Body score is the
-// average of 5 body-part averages (each part = average of its 4 exercises, 0-100), scaled to 90.
-const BODY_PARTS = ['chest', 'arms', 'legs', 'abs', 'back'];
-const BODY_EXERCISE_KEYS = ['ex1', 'ex2', 'ex3', 'ex4'];
-const BODY_EXERCISE_COOLDOWN_MS = 8000;
-const BODY_EXERCISE_TRAIN_MIN = 0.15;
-const BODY_EXERCISE_TRAIN_MAX = 0.4;
+// Body is 90% of Looks, Face (Maxx items, see MAXX_ITEMS_BY_ID) is the other 10%. Body score is a
+// single uncapped accumulator (character.gym.bodyScore) built up by Workouts and eating -- the old
+// separate Body-tab exercise minigame was removed as unnecessarily confusing; Looks now grows as a
+// side effect of the same actions you're already doing for Speed/Defense/weight.
+const WORKOUT_LOOKS_GAIN = 0.1;
+const FOOD_LOOKS_CALORIE_DIVISOR = 5000;
 const BODY_LOOKS_WEIGHT = 0.9;
 const FACE_LOOKS_WEIGHT = 0.1;
 
@@ -281,26 +280,11 @@ function clampStatUncapped(v) {
   return Math.max(0, Math.round(v * 100) / 100);
 }
 
-function ensureGymBodyState(character) {
-  if (!character.gym) character.gym = {};
-  if (!character.gym.bodyExercises) {
-    character.gym.bodyExercises = {};
-    BODY_PARTS.forEach((part) => {
-      character.gym.bodyExercises[part] = { ex1: 0, ex2: 0, ex3: 0, ex4: 0 };
-    });
-  }
-  return character.gym.bodyExercises;
-}
-
-function bodyPartAvg(exercises) {
-  return (exercises.ex1 + exercises.ex2 + exercises.ex3 + exercises.ex4) / 4;
-}
-
-// Body score: average of the 5 body-part averages, scaled to fill its 90% share of Looks.
+// Body score: a single uncapped accumulator built up by Workouts and eating (see doWorkout/
+// doBuyFood), scaled to fill its 90% share of Looks.
 function computeBodyLooksScore(character) {
-  const exercises = ensureGymBodyState(character);
-  const partAvg = BODY_PARTS.reduce((sum, part) => sum + bodyPartAvg(exercises[part]), 0) / BODY_PARTS.length;
-  return (partAvg / STAT_CAP) * STAT_CAP * BODY_LOOKS_WEIGHT;
+  if (!character.gym) character.gym = {};
+  return (character.gym.bodyScore || 0) * BODY_LOOKS_WEIGHT;
 }
 
 // Face score: sum of purchased Maxx items' looks values -- MAXX_ITEMS_BY_ID is calibrated so a full
@@ -322,6 +306,14 @@ function round1(v) {
 
 function round2(v) {
   return Math.round(v * 100) / 100;
+}
+
+// FC amounts need finer precision than cash (dollar-rounded via round2) -- Floydcoin prices sit in
+// the 0.10-0.15 range and hourly mining accrual is a fraction of a per-day rate, so round2 would
+// silently floor small gains to 0.00 forever (they'd never cross the 1-cent threshold to
+// accumulate). Used for every read/write of character.crypto.fc.
+function round4(v) {
+  return Math.round(v * 10000) / 10000;
 }
 
 // Mirrors the client's jobPerkActive('milos11', false) exactly -- Pete'sza's employee discount.
@@ -429,10 +421,7 @@ function newCharacter(firstName, lastName) {
     gym: {
       steroidTier: null,
       roidJailClicksRemaining: 0,
-      bodyExercises: BODY_PARTS.reduce((acc, part) => {
-        acc[part] = { ex1: 0, ex2: 0, ex3: 0, ex4: 0 };
-        return acc;
-      }, {}),
+      bodyScore: 0,
     },
     jail: { inJail: false, crime: null, yearsRemaining: 0, serving: false, contrabandAtkBonus: 0 },
     settings: { hideMilosWarning: false },
@@ -457,6 +446,27 @@ function newCharacter(firstName, lastName) {
     blackjack: { phase: 'betting', playerCards: [], dealerCards: [], bet: 0 },
     combat: { active: false, enemyKey: null, enemyHp: 0, enemyMaxHp: 0, playerHp: 0, playerMaxHp: 0, turn: null, guarding: false },
   };
+}
+
+// Everything ownable that lives in character.inventory as a stack falls into one of these known
+// non-cosmetic catalogs (guns, melee, ammo, armor, wrestling gear, drugs). Titles are the only
+// other kind of inventory stack in the game and are purely client-known/trust-based (their catalog
+// is large and cosmetic-only, never validated server-side) -- so "not a known non-cosmetic id" is
+// the reliable way to identify a title/cosmetic stack without needing the client's title catalog.
+function isCosmeticInventoryId(id) {
+  return !GUN_ITEMS_BY_ID[id] && !MELEE_ITEMS_BY_ID[id] && !AMMO_ITEMS_BY_ID[id]
+    && !ARMOR_ITEMS_BY_ID[id] && !WRESTLING_GEAR_ITEMS_BY_ID[id] && !DRUG_ITEMS_BY_ID[id];
+}
+
+// Admin "reset all stats" action: wipes a character back to newCharacter() defaults (stats, cash,
+// chips, jobs, bank, equipment, jail, farms, crypto, everything) but keeps titles (owned/equipped/
+// customTitles) and any cosmetic inventory stacks (crate-won titles), since those are meant to
+// survive a stats wipe.
+function resetCharacterKeepCosmetics(character) {
+  const fresh = newCharacter(character.firstName, character.lastName);
+  fresh.titles = character.titles;
+  fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
+  return fresh;
 }
 
 // Accounts created before blackjack moved server-side won't have this field yet.
@@ -642,31 +652,14 @@ function doWorkout(character) {
   const defenseGain = muscleGain * DEFENSE_PER_LB;
   character.stats.speed = clampStat(character.stats.speed + speedGain);
   character.stats.defense = clampStat(character.stats.defense + defenseGain);
+  character.gym.bodyScore = round2((character.gym.bodyScore || 0) + WORKOUT_LOOKS_GAIN);
+  recomputeLooks(character);
   return {
     ok: true,
-    message: `Workout complete: +${round1(speedGain)} Speed, +${round2(muscleGain)} lbs Muscle, +${round1(defenseGain)} Defense.`,
+    message: `Workout complete: +${round1(speedGain)} Speed, +${round2(muscleGain)} lbs Muscle, +${round1(defenseGain)} Defense, +Looks.`,
     cls: 'gain',
     character,
   };
-}
-
-// Mirrors the client's doBodyExercise() exactly. Trains one of a body part's 4 exercises (0-100
-// each); Looks is a derived stat, so it's recomputed from the exercise scores + Maxx items after
-// every train, never incremented directly.
-function doBodyExercise(character, bodyPart, exerciseKey) {
-  if (!BODY_PARTS.includes(bodyPart)) return { ok: false, reason: 'Unknown body part.' };
-  if (!BODY_EXERCISE_KEYS.includes(exerciseKey)) return { ok: false, reason: 'Unknown exercise.' };
-
-  const cooldownKey = `bodyExercise_${bodyPart}_${exerciseKey}`;
-  const remaining = getRemainingCooldown(character, cooldownKey, BODY_EXERCISE_COOLDOWN_MS);
-  if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
-
-  character.cooldowns[cooldownKey] = Date.now();
-  const exercises = ensureGymBodyState(character);
-  const gain = round2(randFloat(BODY_EXERCISE_TRAIN_MIN, BODY_EXERCISE_TRAIN_MAX));
-  exercises[bodyPart][exerciseKey] = clampStatUncapped(exercises[bodyPart][exerciseKey] + gain);
-  recomputeLooks(character);
-  return { ok: true, message: `Trained ${bodyPart} (${exerciseKey}): +${gain.toFixed(2)}.`, cls: 'gain', character };
 }
 
 // Trades muscle mass for height -- costs a fixed 60 lbs of Muscle per inch.
@@ -721,6 +714,8 @@ function doBuyFood(character, itemId) {
   const lbs = item.calories / CALORIES_PER_LB;
   character.fatGained += lbs;
   character.stats.speed = clampStat(character.stats.speed - lbs * SPEED_LOSS_PER_LB);
+  character.gym.bodyScore = round2((character.gym.bodyScore || 0) + item.calories / FOOD_LOOKS_CALORIE_DIVISOR);
+  recomputeLooks(character);
 
   const achievements = ensureAchievementsState(character);
   achievements.foodEaten += 1;
@@ -729,7 +724,7 @@ function doBuyFood(character, itemId) {
   return {
     ok: true,
     messages: [
-      { message: `Ate a ${item.name}: +${round1(lbs)} lbs Fat (fuel for the gym), -${round1(lbs * SPEED_LOSS_PER_LB)} Speed.`, cls: 'loss' },
+      { message: `Ate a ${item.name}: +${round1(lbs)} lbs Fat (fuel for the gym), -${round1(lbs * SPEED_LOSS_PER_LB)} Speed, +Looks.`, cls: 'loss' },
       ...(grantedTitle ? [grantedTitle] : []),
     ],
     character,
@@ -2148,7 +2143,7 @@ function tryInterceptFarmShipment(attacker, target) {
 // ---------- Drugs & Rugs: Floydcoin (crypto) ----------
 const FC_START_PRICE = 10000; // flavor/display only -- the fixed rate doSellFC() actually uses
 const FC_BASE_RATE_PER_DAY = 0.05; // free idle rig ("MyShitter900"), always active, no purchase needed
-const FC_COLLECT_MIN_INTERVAL_MS = 20 * 60 * 60 * 1000; // ~once a day, not hourly tab-farmable
+const FC_COLLECT_MIN_INTERVAL_MS = 60 * 60 * 1000; // hourly
 // Each tier's cost is back-solved so it pays for itself in ~10 collections at its own new rate:
 // cost = addRate * 10(collections) * FC_START_PRICE.
 const CRYPTO_UPGRADE_TIERS = {
@@ -2202,22 +2197,34 @@ function doBuyCryptoUpgrade(character, track) {
 function doCollectCrypto(character) {
   const crypto = ensureCryptoState(character);
   const remaining = FC_COLLECT_MIN_INTERVAL_MS - (Date.now() - crypto.lastCollectedAt);
-  if (remaining > 0) return { ok: false, reason: `Come back in ${Math.ceil(remaining / (60 * 60 * 1000))}h.` };
+  if (remaining > 0) return { ok: false, reason: `Come back in ${Math.ceil(remaining / (60 * 1000))}m.` };
   const elapsedDays = (Date.now() - crypto.lastCollectedAt) / (24 * 60 * 60 * 1000);
-  const earned = round2(cryptoDailyRate(crypto) * elapsedDays);
-  crypto.fc = round2(crypto.fc + earned);
+  const earned = round4(cryptoDailyRate(crypto) * elapsedDays);
+  crypto.fc = round4(crypto.fc + earned);
   crypto.lastCollectedAt = Date.now();
-  return { ok: true, message: `Collected ${earned.toFixed(2)} FC.`, cls: 'gain', character };
+  return { ok: true, message: `Collected ${earned.toFixed(4)} FC.`, cls: 'gain', character };
 }
 
 function doSellFC(character, amount) {
   const crypto = ensureCryptoState(character);
   if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
   if (amount > crypto.fc) return { ok: false, reason: "You don't have that much FC." };
-  crypto.fc = round2(crypto.fc - amount);
+  crypto.fc = round4(crypto.fc - amount);
   const payout = round2(amount * FC_START_PRICE);
   character.cash = round2(character.cash + payout);
   return { ok: true, message: `Sold ${amount} FC for $${payout.toFixed(2)}.`, cls: 'gain', character };
+}
+
+// Direct cash -> FC purchase at the same fixed rate doSellFC uses, for players who don't want to
+// wait on passive mining.
+function doBuyFC(character, amount) {
+  const crypto = ensureCryptoState(character);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  const cost = round2(amount * FC_START_PRICE);
+  if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - cost);
+  crypto.fc = round4(crypto.fc + amount);
+  return { ok: true, message: `Bought ${amount} FC for $${cost.toFixed(2)}.`, cls: 'gain', character };
 }
 
 // Called from a successful NMC robbery against a victim with an FC balance -- the "wallet-drain"
@@ -2228,11 +2235,11 @@ function tryDrainCryptoWallet(attacker, target) {
   const chance = Math.min(0.25, (attacker.stats.speed / 100) * 0.3);
   if (Math.random() >= chance) return null;
 
-  const drained = round2(targetCrypto.fc * randFloat(0.1, 0.3));
+  const drained = round4(targetCrypto.fc * randFloat(0.1, 0.3));
   if (drained <= 0) return null;
-  targetCrypto.fc = round2(targetCrypto.fc - drained);
+  targetCrypto.fc = round4(targetCrypto.fc - drained);
   const attackerCrypto = ensureCryptoState(attacker);
-  attackerCrypto.fc = round2(attackerCrypto.fc + drained);
+  attackerCrypto.fc = round4(attackerCrypto.fc + drained);
   return `You also cracked their wallet and drained ${drained.toFixed(2)} FC!`;
 }
 
@@ -2308,7 +2315,7 @@ function doMintAltcoin(character, name) {
   if (!validated.ok) return validated;
   const crypto = ensureCryptoState(character);
   if (crypto.fc < ALTCOIN_MINT_COST_FC) return { ok: false, reason: `Minting costs ${ALTCOIN_MINT_COST_FC} FC.` };
-  crypto.fc = round2(crypto.fc - ALTCOIN_MINT_COST_FC);
+  crypto.fc = round4(crypto.fc - ALTCOIN_MINT_COST_FC);
   return { ok: true, name: validated.name, character };
 }
 
@@ -2320,7 +2327,7 @@ function doBuyAltcoinCoins(character, coin, qty) {
   const crypto = ensureCryptoState(character);
   const cost = altcoinBuyCost(coin.sold, qty);
   if (crypto.fc < cost) return { ok: false, reason: 'Not enough FC.' };
-  crypto.fc = round2(crypto.fc - cost);
+  crypto.fc = round4(crypto.fc - cost);
   return { ok: true, cost, message: `Bought ${qty} coin(s) for ${cost.toFixed(3)} FC.`, cls: 'gain', character };
 }
 
@@ -2408,6 +2415,7 @@ function buildLeaderboardBoard(users, limit = 10) {
 
 module.exports = {
   newCharacter,
+  resetCharacterKeepCosmetics,
   doWork,
   doSlut,
   doCrime,
@@ -2456,6 +2464,7 @@ module.exports = {
   doBuyCryptoUpgrade,
   doCollectCrypto,
   doSellFC,
+  doBuyFC,
   cryptoDailyRate,
   CRYPTO_UPGRADE_TIERS,
   FC_START_PRICE,
@@ -2514,16 +2523,14 @@ module.exports = {
   buildLeaderboardBoard,
   getRemainingCooldown,
   round2,
+  round4,
   clampStat,
   NPC_TYPES,
   COOLDOWN_MS,
-  doBodyExercise,
   recomputeLooks,
   computeBodyLooksScore,
   computeFaceLooksScore,
   isMaxxComplete,
-  BODY_PARTS,
-  BODY_EXERCISE_KEYS,
   doStretchForHeight,
   ensureWeightState,
 };
