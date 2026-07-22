@@ -39,9 +39,11 @@ const ROID_ESCAPE_COST = GYM_COST * 4;
 // Body is 90% of Looks, Face (Maxx items, see MAXX_ITEMS_BY_ID) is the other 10%. Body score is a
 // single uncapped accumulator (character.gym.bodyScore) built up by Workouts and eating -- the old
 // separate Body-tab exercise minigame was removed as unnecessarily confusing; Looks now grows as a
-// side effect of the same actions you're already doing for Speed/Defense/weight.
-const WORKOUT_LOOKS_GAIN = 0.1;
-const FOOD_LOOKS_CALORIE_DIVISOR = 5000;
+// side effect of the same actions you're already doing for Speed/Defense/weight. Eating costs a
+// little Looks (slightly less than a Workout gains) so the two pull in opposite directions --
+// working out nets you ahead, but you can't just eat your way to higher Looks.
+const WORKOUT_LOOKS_GAIN = 0.05;
+const FOOD_LOOKS_LOSS = 0.04;
 const BODY_LOOKS_WEIGHT = 0.9;
 const FACE_LOOKS_WEIGHT = 0.1;
 
@@ -714,7 +716,7 @@ function doBuyFood(character, itemId) {
   const lbs = item.calories / CALORIES_PER_LB;
   character.fatGained += lbs;
   character.stats.speed = clampStat(character.stats.speed - lbs * SPEED_LOSS_PER_LB);
-  character.gym.bodyScore = round2((character.gym.bodyScore || 0) + item.calories / FOOD_LOOKS_CALORIE_DIVISOR);
+  character.gym.bodyScore = round2((character.gym.bodyScore || 0) - FOOD_LOOKS_LOSS);
   recomputeLooks(character);
 
   const achievements = ensureAchievementsState(character);
@@ -724,7 +726,7 @@ function doBuyFood(character, itemId) {
   return {
     ok: true,
     messages: [
-      { message: `Ate a ${item.name}: +${round1(lbs)} lbs Fat (fuel for the gym), -${round1(lbs * SPEED_LOSS_PER_LB)} Speed, +Looks.`, cls: 'loss' },
+      { message: `Ate a ${item.name}: +${round1(lbs)} lbs Fat (fuel for the gym), -${round1(lbs * SPEED_LOSS_PER_LB)} Speed, -Looks.`, cls: 'loss' },
       ...(grantedTitle ? [grantedTitle] : []),
     ],
     character,
