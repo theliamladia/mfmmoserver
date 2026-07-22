@@ -12,11 +12,12 @@ const ALLIANCE_DEBUFF_MINOR = 3; // smaller nudge toward Dirty Bad for lower-sta
 const GUZMAN_MIN_ALLIANCE = 60; // Bad Hustles require Bad or worse; also the floor a bust snaps you to
 const CRIME_STREAK_MAX = 12; // cap on how much a record can escalate a sentence
 
+// Reward ranges are 20% below their original values (Drugs & Rugs balance pass -- crime pay down).
 const CRIME_TIERS_BY_ID = {
-  shoplift: { id: 'shoplift', name: '🛍️ Shoplifting', minReward: 80, maxReward: 200, jailYears: 1, baseRisk: 0.35 },
-  pettytheft: { id: 'pettytheft', name: '👛 Petty Theft', minReward: 350, maxReward: 650, jailYears: 1, baseRisk: 0.45 },
-  burglary: { id: 'burglary', name: '🏚️ Burglary', minReward: 1200, maxReward: 2200, jailYears: 4, baseRisk: 0.5 },
-  grandtheft: { id: 'grandtheft', name: '🚗 Grand Theft Auto', minReward: 4000, maxReward: 6000, jailYears: 10, baseRisk: 0.6 },
+  shoplift: { id: 'shoplift', name: '🛍️ Shoplifting', minReward: 64, maxReward: 160, jailYears: 1, baseRisk: 0.35 },
+  pettytheft: { id: 'pettytheft', name: '👛 Petty Theft', minReward: 280, maxReward: 520, jailYears: 1, baseRisk: 0.45 },
+  burglary: { id: 'burglary', name: '🏚️ Burglary', minReward: 960, maxReward: 1760, jailYears: 4, baseRisk: 0.5 },
+  grandtheft: { id: 'grandtheft', name: '🚗 Grand Theft Auto', minReward: 3200, maxReward: 4800, jailYears: 10, baseRisk: 0.6 },
 };
 const CRIME_COOLDOWN_MS = 12000;
 const CRIME_RISK_MIN = 0.05;
@@ -81,6 +82,11 @@ const AMMO_ITEMS_BY_ID = {
   ammo9mm: { id: 'ammo9mm', name: '📦 9mm Ammo Box', type: 'ammo', caliber: '9mm', cost: 50 },
   ammo556: { id: 'ammo556', name: '📦 5.56 Ammo Box', type: 'ammo', caliber: '5.56', cost: 80 },
 };
+// Priced well above the priciest rifle so it reads as a serious one-time investment, not a normal
+// gear buy -- consumed after the wearer's next PvP duel (win or lose), see applyDuelOutcome().
+const ARMOR_ITEMS_BY_ID = {
+  bodyArmor: { id: 'bodyArmor', name: '🦺 Body Armor', type: 'gear', slot: 'armor', cost: 8000, statBonuses: { defense: 15 } },
+};
 const CONCEALED_APPLY_COST = 2000;
 const CONCEALED_WAIT_MS = 10 * 60 * 1000;
 
@@ -120,13 +126,14 @@ const LOOKS_TRAIN_K = LOOKS_TRAIN_BONUS_MAX / (1 - Math.sqrt(LOOKS_TRAIN_BASE / 
 const GOOD_CEO_MULTIPLIER = 1.6;
 const GOOD_CEO_MIN_AVG = 95; // Regional Manager rank
 
+// Pay ranges are 10% above their original values (Drugs & Rugs balance pass -- Good Hustle pay up).
 const JOB_RANKS = [
-  { minAvg: 0, title: 'Trainee', payMin: 0.10, payMax: 0.50, cooldownMs: 2000 },
-  { minAvg: 15, title: 'Associate', payMin: 0.20, payMax: 0.75, cooldownMs: 1800 },
-  { minAvg: 35, title: 'Senior Associate', payMin: 0.40, payMax: 1.10, cooldownMs: 1600 },
-  { minAvg: 55, title: 'Supervisor', payMin: 0.70, payMax: 1.80, cooldownMs: 1400 },
-  { minAvg: 75, title: 'Manager', payMin: 1.15, payMax: 2.75, cooldownMs: 1200 },
-  { minAvg: 95, title: 'Regional Manager', payMin: 1.80, payMax: 4.00, cooldownMs: 1000 },
+  { minAvg: 0, title: 'Trainee', payMin: 0.11, payMax: 0.55, cooldownMs: 2000 },
+  { minAvg: 15, title: 'Associate', payMin: 0.22, payMax: 0.83, cooldownMs: 1800 },
+  { minAvg: 35, title: 'Senior Associate', payMin: 0.44, payMax: 1.21, cooldownMs: 1600 },
+  { minAvg: 55, title: 'Supervisor', payMin: 0.77, payMax: 1.98, cooldownMs: 1400 },
+  { minAvg: 75, title: 'Manager', payMin: 1.27, payMax: 3.03, cooldownMs: 1200 },
+  { minAvg: 95, title: 'Regional Manager', payMin: 1.98, payMax: 4.40, cooldownMs: 1000 },
 ];
 const BAD_JOB_RANKS = [
   { minAvg: 0, title: 'Rookie', payMin: 5, payMax: 25, cooldownMs: 2000 },
@@ -174,11 +181,13 @@ const DRUG_ITEMS_BY_ID = {
   drugCoke: { id: 'drugCoke', name: '❄️ Cocaine', type: 'drug', wholesaleCost: 150, sellMin: 220, sellMax: 320, jailYearsPerUnit: 1, riskBase: 0.2, riskPerUnit: 0.04 },
 };
 
+// Unlock thresholds are 10x their original values (Drugs & Rugs: makes clearing a dealer -- and
+// unlocking Milos Outlook Farms, see FARM_UNLOCK_UNITS_SOLD -- a much bigger grind).
 const DEALER_TIERS_BY_ID = {
   guzman: { id: 'guzman', name: '🕴️ Guzman Nestor', drugId: 'drugWeed', unlockUnits: 0 },
-  esteban: { id: 'esteban', name: '🕴️ Esteban Vico', drugId: 'drugPills', unlockUnits: 40 },
-  ramon: { id: 'ramon', name: '🕴️ Ramon Castillo', drugId: 'drugMeth', unlockUnits: 100 },
-  dmitri: { id: 'dmitri', name: '🕴️ Dmitri Kovash', drugId: 'drugCoke', unlockUnits: 200 },
+  esteban: { id: 'esteban', name: '🕴️ Esteban Vico', drugId: 'drugPills', unlockUnits: 400 },
+  ramon: { id: 'ramon', name: '🕴️ Ramon Castillo', drugId: 'drugMeth', unlockUnits: 1000 },
+  dmitri: { id: 'dmitri', name: '🕴️ Dmitri Kovash', drugId: 'drugCoke', unlockUnits: 2000 },
 };
 const DEALER_QUICK_MIN = 3;
 const DEALER_QUICK_MAX = 12;
@@ -432,13 +441,15 @@ function newCharacter(firstName, lastName) {
     marriage: { proposedTo: null, spouseName: null, spouseUserId: null },
     licenses: { gunSafety: false, concealedPermit: false, concealedPendingUntil: 0 },
     inventory: [],
-    equipment: { helmet: null, chest: null, pants: null, feet: null, holsterL: null, holsterR: null, openCarry: null, melee: null },
+    equipment: { helmet: null, chest: null, pants: null, feet: null, holsterL: null, holsterR: null, openCarry: null, melee: null, armor: null },
     weaponSkills: { shooting: 0, draw: 0, magReload: 0 },
     bank: { tier: 0, balance: 0, hasCreditCard: false, creditBalance: 0, lastBillTs: Date.now() },
     arrestRecord: [],
     jobs: { currentJob: null, skills: { skill1: 0, skill2: 0, skill3: 0, skill4: 0 }, pizzaPerkGranted: false },
     badJobs: { currentJob: null, skills: { skill1: 0, skill2: 0, skill3: 0, skill4: 0 } },
     drugDealer: { unitsSold: 0 },
+    farms: { plots: [], securityTier: 0 },
+    crypto: { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() },
     crimeRecord: { streak: 0 },
     moralsCenter: { choice: null, lastTickTs: Date.now() },
     mtnHistory: [],
@@ -528,6 +539,7 @@ function pickFlavorLine(pool, amount, playerName) {
 // Mirrors the client's doHustle('work') branch exactly, but takes character as a parameter
 // (no shared global) and enforces the cooldown server-side instead of trusting the caller.
 function doWork(character) {
+  if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'work', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
@@ -544,6 +556,7 @@ function doWork(character) {
 // Mirrors the client's doHustle('slut') branch exactly. `otherPlayerName` is looked up by the
 // route (getRandomOtherUserCharacterName in db.js) since gameLogic.js has no DB access of its own.
 function doSlut(character, otherPlayerName) {
+  if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'slut', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
@@ -569,6 +582,7 @@ function doSlut(character, otherPlayerName) {
 
 // Mirrors the client's doHustle('crime') branch exactly, including the jail-bust path.
 function doCrime(character) {
+  if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'crime', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
@@ -1087,6 +1101,22 @@ function doBuyMelee(character, itemId) {
   };
 }
 
+// No license/discount gating -- a straightforward expensive one-time buy. Consumed automatically
+// after the wearer's next PvP duel, see applyDuelOutcome().
+function doBuyArmor(character, itemId) {
+  const item = ARMOR_ITEMS_BY_ID[itemId];
+  if (!item) return { ok: false, reason: 'Unknown armor.' };
+  if (character.cash < item.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash -= item.cost;
+  addToInventory(character, item.id, 1);
+  return {
+    ok: true,
+    message: `Purchased ${item.name} for $${item.cost.toFixed(2)}. It's in your Inventory -- equip it to carry it. Gone after your next duel.`,
+    cls: 'gain',
+    character,
+  };
+}
+
 // Mirrors the client's doBuyAmmo() exactly.
 function doBuyAmmo(character, itemId, activeModifier) {
   const item = AMMO_ITEMS_BY_ID[itemId];
@@ -1362,7 +1392,9 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
     attacker.cash = round2(attacker.cash + gain);
     target.cash = round2(target.cash - gain);
     attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
-    return { ok: true, jailed: false, message: `Robbed ${target.firstName} ${target.lastName} for $${gain.toFixed(2)} and got away clean.`, cls: 'gain', attacker, target };
+    const bonusNotes = [tryInterceptFarmShipment(attacker, target), tryDrainCryptoWallet(attacker, target)].filter(Boolean);
+    const message = `Robbed ${target.firstName} ${target.lastName} for $${gain.toFixed(2)} and got away clean.${bonusNotes.length ? ` ${bonusNotes.join(' ')}` : ''}`;
+    return { ok: true, jailed: false, message, cls: 'gain', attacker, target };
   }
 
   const winChance = Math.max(0.15, Math.min(0.85, 0.5 + (attacker.stats.attack - target.stats.attack) * 0.015));
@@ -1371,10 +1403,11 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
     attacker.cash = round2(attacker.cash + gain);
     target.cash = round2(target.cash - gain);
     attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
+    const bonusNotes = [tryInterceptFarmShipment(attacker, target), tryDrainCryptoWallet(attacker, target)].filter(Boolean);
     return {
       ok: true,
       jailed: false,
-      message: `${target.firstName} noticed and fought back! You won the scuffle and got away with $${gain.toFixed(2)}.`,
+      message: `${target.firstName} noticed and fought back! You won the scuffle and got away with $${gain.toFixed(2)}.${bonusNotes.length ? ` ${bonusNotes.join(' ')}` : ''}`,
       cls: 'gain',
       attacker,
       target,
@@ -1402,7 +1435,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
 // Minimal version of the client's getItemDef() -- only the fields Combat needs (atkBonus,
 // statBonuses), so only the item tables that carry those.
 function combatItemDef(itemId) {
-  return GUN_ITEMS_BY_ID[itemId] || MELEE_ITEMS_BY_ID[itemId] || WRESTLING_GEAR_ITEMS_BY_ID[itemId] || null;
+  return GUN_ITEMS_BY_ID[itemId] || MELEE_ITEMS_BY_ID[itemId] || WRESTLING_GEAR_ITEMS_BY_ID[itemId] || ARMOR_ITEMS_BY_ID[itemId] || null;
 }
 
 function pickOpponentPool(character) {
@@ -1430,7 +1463,7 @@ function equippedWeaponAtkBonus(character) {
 }
 
 function gearStatBonus(character, stat) {
-  const ids = [character.equipment.helmet, character.equipment.chest, character.equipment.pants, character.equipment.feet].filter(Boolean);
+  const ids = [character.equipment.helmet, character.equipment.chest, character.equipment.pants, character.equipment.feet, character.equipment.armor].filter(Boolean);
   return ids.reduce((sum, id) => {
     const item = combatItemDef(id);
     return sum + (item && item.statBonuses && item.statBonuses[stat] ? item.statBonuses[stat] : 0);
@@ -1671,12 +1704,23 @@ function resolveDuelTurn(state, actor, opponent, actorSide, action) {
   return { ok: true, action, dmg, missed: false, opponentDefeated: state[opponentHpKey] <= 0 };
 }
 
+// Body Armor is a one-duel consumable regardless of outcome -- worn into the fight, worn out by
+// the end of it either way. Unequips it and burns one unit from inventory.
+function consumeArmorIfEquipped(character) {
+  const armorId = character.equipment.armor;
+  if (!armorId) return;
+  character.equipment.armor = null;
+  removeFromInventory(character, armorId, 1);
+}
+
 // Applies the flat cash prize from loser to winner once a duel ends, whether by knockout or
 // forfeit -- mutates both character objects, caller saves them.
 function applyDuelOutcome(winnerCharacter, loserCharacter) {
   const reward = Math.min(loserCharacter.cash, randInt(DUEL_CASH_REWARD_MIN, DUEL_CASH_REWARD_MAX));
   loserCharacter.cash = round2(loserCharacter.cash - reward);
   winnerCharacter.cash = round2(winnerCharacter.cash + reward);
+  consumeArmorIfEquipped(winnerCharacter);
+  consumeArmorIfEquipped(loserCharacter);
   return reward;
 }
 
@@ -1911,6 +1955,387 @@ function creditSellerForSale(sellerCharacter, itemId, qty, total, buyerName) {
   sellerCharacter.mtnHistory.push({ type: 'sold', itemId, qty, totalPrice: total, ts: Date.now(), counterpartyName: buyerName });
 }
 
+// ---------- Drugs & Rugs: Milos Outlook Farms ----------
+// Unlocks once you've cleared Guzman and unlocked Esteban (i.e. sold enough weed to hit the new
+// 10x'd unlock threshold below) -- "clear a drug dealer" per the design doc.
+const FARM_UNLOCK_UNITS_SOLD = 400;
+const FARM_PLOT_COST = 50000;
+const FARM_PREP_COST = 1200; // till + water + fertilizer, bundled into one action
+const FARM_SEED_COST_BY_DRUG = { drugWeed: 150, drugCoke: 1200 };
+const FARM_GROW_MS = 60 * 60 * 1000;
+const FARM_PACKAGE_MS = 5 * 60 * 1000;
+const FARM_SHIP_MS = 60 * 60 * 1000;
+const FARM_PAYOUT_MULT = 10; // confirmed final, bumped up from an original 5x during design review
+const FARM_CONFISCATION_BASE = 0.30;
+const FARM_CONFISCATION_FLOOR = 0.05;
+const FARM_SECURITY_MAX_TIER = 5; // each tier -5%, hits the floor at tier 5
+const FARM_SECURITY_TIER_COST = 10000; // flat per tier, scales with tier number below
+// Recommended-but-unconfirmed by the project owner: cap plots at 1 per player so Farms doesn't
+// outpace the rest of the intentional economy slowdown. Flag before raising this.
+const FARM_MAX_PLOTS = 1;
+
+function ensureFarmsState(character) {
+  if (!character.farms) character.farms = { plots: [], securityTier: 0 };
+  if (character.farms.securityTier === undefined) character.farms.securityTier = 0;
+  return character.farms;
+}
+
+function farmConfiscationChance(securityTier) {
+  return Math.max(FARM_CONFISCATION_FLOOR, FARM_CONFISCATION_BASE - securityTier * 0.05);
+}
+
+// Lazily advances a plot's grow/package/ship timers based on wall-clock elapsed time -- called at
+// the top of every farm action instead of running a real background job, same "compute on read"
+// approach the rest of this codebase uses for anything time-based.
+function advanceFarmPlot(plot) {
+  const now = Date.now();
+  if (plot.stage === 'growing' && now >= plot.stageReadyAt) {
+    plot.stage = 'packaging';
+    plot.stageReadyAt = plot.stageReadyAt + FARM_PACKAGE_MS;
+  }
+  if (plot.stage === 'packaging' && now >= plot.stageReadyAt) {
+    plot.stage = 'shipping';
+    plot.stageReadyAt = plot.stageReadyAt + FARM_SHIP_MS;
+  }
+  if (plot.stage === 'shipping' && now >= plot.stageReadyAt) {
+    plot.stage = 'ready';
+  }
+  return plot;
+}
+
+function farmPlotPayout(plot) {
+  const drug = DRUG_ITEMS_BY_ID[plot.drugType];
+  return round2(((drug.sellMin + drug.sellMax) / 2) * FARM_PAYOUT_MULT);
+}
+
+function doBuyFarmPlot(character) {
+  const farms = ensureFarmsState(character);
+  if ((character.drugDealer.unitsSold || 0) < FARM_UNLOCK_UNITS_SOLD) {
+    return { ok: false, reason: 'Sell more product to Guzman first -- Milos Outlook Farms unlocks once Esteban does.' };
+  }
+  if (farms.plots.length >= FARM_MAX_PLOTS) return { ok: false, reason: 'You already own the maximum number of plots.' };
+  if (character.cash < FARM_PLOT_COST) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - FARM_PLOT_COST);
+  farms.plots.push({
+    id: `plot_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+    drugType: null,
+    prepped: false,
+    stage: 'empty',
+    stageReadyAt: 0,
+    confiscated: false,
+  });
+  return { ok: true, message: `Bought a farm plot for $${FARM_PLOT_COST.toLocaleString()}.`, cls: 'gain', character };
+}
+
+function findFarmPlot(character, plotId) {
+  const farms = ensureFarmsState(character);
+  return farms.plots.find((p) => p.id === plotId);
+}
+
+function doPrepFarmPlot(character, plotId) {
+  const plot = findFarmPlot(character, plotId);
+  if (!plot) return { ok: false, reason: 'Unknown plot.' };
+  advanceFarmPlot(plot);
+  if (plot.stage !== 'empty') return { ok: false, reason: 'This plot is already in a grow cycle.' };
+  if (character.cash < FARM_PREP_COST) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - FARM_PREP_COST);
+  plot.prepped = true;
+  return { ok: true, message: `Tilled, watered, and fertilized for $${FARM_PREP_COST.toLocaleString()}.`, cls: 'gain', character };
+}
+
+function doPlantFarmSeed(character, plotId, drugId) {
+  const plot = findFarmPlot(character, plotId);
+  if (!plot) return { ok: false, reason: 'Unknown plot.' };
+  advanceFarmPlot(plot);
+  if (plot.stage !== 'empty') return { ok: false, reason: 'This plot is already in a grow cycle.' };
+  if (!plot.prepped) return { ok: false, reason: 'Till, water, and fertilize this plot first.' };
+  const seedCost = FARM_SEED_COST_BY_DRUG[drugId];
+  if (!seedCost) return { ok: false, reason: 'Unknown seed type.' };
+  if (drugId === 'drugCoke' && (character.drugDealer.unitsSold || 0) < DEALER_TIERS_BY_ID.dmitri.unlockUnits) {
+    return { ok: false, reason: 'Cocaine seeds unlock once Dmitri does.' };
+  }
+  if (character.cash < seedCost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - seedCost);
+
+  const farms = ensureFarmsState(character);
+  const chance = farmConfiscationChance(farms.securityTier);
+  const confiscated = Math.random() < chance;
+
+  plot.drugType = drugId;
+  plot.prepped = false;
+  plot.stage = 'growing';
+  plot.stageReadyAt = Date.now() + FARM_GROW_MS;
+  plot.confiscated = confiscated;
+
+  const riskNote = confiscated
+    ? `Bad news: this run's already busted (${Math.round(chance * 100)}% odds) -- it'll still take the full cycle, but the harvest is a write-off.`
+    : `Risk rolled and cleared (${Math.round(chance * 100)}% odds) -- this run is safe from confiscation.`;
+  return { ok: true, message: `Planted ${DRUG_ITEMS_BY_ID[drugId].name} seed. ${riskNote}`, cls: confiscated ? 'loss' : 'gain', character };
+}
+
+function doCollectFarmHarvest(character, plotId) {
+  const plot = findFarmPlot(character, plotId);
+  if (!plot) return { ok: false, reason: 'Unknown plot.' };
+  advanceFarmPlot(plot);
+  if (plot.stage !== 'ready') return { ok: false, reason: 'This grow is not ready to collect yet.' };
+
+  const drugName = DRUG_ITEMS_BY_ID[plot.drugType].name;
+  let message;
+  let cls;
+  if (plot.confiscated) {
+    message = `Confiscated: your ${drugName} shipment was seized. No payout.`;
+    cls = 'loss';
+  } else {
+    const payout = farmPlotPayout(plot);
+    character.cash = round2(character.cash + payout);
+    message = `Shipment landed! Sold ${drugName} for $${payout.toFixed(2)} (10x street rate).`;
+    cls = 'gain';
+  }
+  plot.drugType = null;
+  plot.prepped = false;
+  plot.stage = 'empty';
+  plot.stageReadyAt = 0;
+  plot.confiscated = false;
+  return { ok: true, message, cls, character };
+}
+
+function doBuyFarmSecurity(character) {
+  const farms = ensureFarmsState(character);
+  if (farms.securityTier >= FARM_SECURITY_MAX_TIER) return { ok: false, reason: 'Security is already maxed out.' };
+  const cost = FARM_SECURITY_TIER_COST * (farms.securityTier + 1);
+  if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - cost);
+  farms.securityTier += 1;
+  return {
+    ok: true,
+    message: `Security upgraded (tier ${farms.securityTier}) -- confiscation risk down to ${Math.round(farmConfiscationChance(farms.securityTier) * 100)}%.`,
+    cls: 'gain',
+    character,
+  };
+}
+
+// Called from a successful NMC robbery (doRobPlayer) against a victim who has a plot currently in
+// its 1-hour shipping window -- the "shipment interception" risk from the design doc. Advances the
+// victim's plot first so a stage that finished mid-robbery doesn't get double-counted.
+function tryInterceptFarmShipment(attacker, target) {
+  const farms = ensureFarmsState(target);
+  const plot = farms.plots.find((p) => {
+    advanceFarmPlot(p);
+    return p.stage === 'shipping';
+  });
+  if (!plot) return null;
+
+  const chance = Math.min(0.25, (attacker.stats.speed / 100) * 0.3);
+  if (Math.random() >= chance) return null;
+
+  const drugName = DRUG_ITEMS_BY_ID[plot.drugType].name;
+  let note;
+  if (plot.confiscated) {
+    note = `You tracked their shipment location, but it was already busted -- nothing to take.`;
+  } else {
+    const payout = farmPlotPayout(plot);
+    attacker.cash = round2(attacker.cash + payout);
+    note = `You also tracked down their in-transit ${drugName} shipment and intercepted it for $${payout.toFixed(2)}!`;
+  }
+  plot.drugType = null;
+  plot.prepped = false;
+  plot.stage = 'empty';
+  plot.stageReadyAt = 0;
+  plot.confiscated = false;
+  return note;
+}
+
+// ---------- Drugs & Rugs: Floydcoin (crypto) ----------
+const FC_START_PRICE = 10000; // flavor/display only -- the fixed rate doSellFC() actually uses
+const FC_BASE_RATE_PER_DAY = 0.05; // free idle rig ("MyShitter900"), always active, no purchase needed
+const FC_COLLECT_MIN_INTERVAL_MS = 20 * 60 * 60 * 1000; // ~once a day, not hourly tab-farmable
+// Each tier's cost is back-solved so it pays for itself in ~10 collections at its own new rate:
+// cost = addRate * 10(collections) * FC_START_PRICE.
+const CRYPTO_UPGRADE_TIERS = {
+  ram: [
+    { addRate: 0.02, cost: 2000 },
+    { addRate: 0.05, cost: 5000 },
+    { addRate: 0.10, cost: 10000 },
+  ],
+  cpu: [
+    { addRate: 0.05, cost: 5000 },
+    { addRate: 0.12, cost: 12000 },
+    { addRate: 0.25, cost: 25000 },
+  ],
+  gpu: [
+    { addRate: 0.10, cost: 10000 },
+    { addRate: 0.25, cost: 25000 },
+    { addRate: 0.50, cost: 50000 },
+  ],
+};
+
+function ensureCryptoState(character) {
+  if (!character.crypto) {
+    character.crypto = { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() };
+  }
+  return character.crypto;
+}
+
+function cryptoDailyRate(crypto) {
+  const rate = (track, tier) => CRYPTO_UPGRADE_TIERS[track].slice(0, tier).reduce((sum, t) => sum + t.addRate, 0);
+  return FC_BASE_RATE_PER_DAY + rate('ram', crypto.ramTier) + rate('cpu', crypto.cpuTier) + rate('gpu', crypto.gpuTier);
+}
+
+function doBuyCryptoUpgrade(character, track) {
+  const tiers = CRYPTO_UPGRADE_TIERS[track];
+  if (!tiers) return { ok: false, reason: 'Unknown upgrade track.' };
+  const crypto = ensureCryptoState(character);
+  const tierKey = `${track}Tier`;
+  if (crypto[tierKey] >= tiers.length) return { ok: false, reason: 'Already maxed out.' };
+  const next = tiers[crypto[tierKey]];
+  if (character.cash < next.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - next.cost);
+  crypto[tierKey] += 1;
+  return {
+    ok: true,
+    message: `${track.toUpperCase()} upgraded to tier ${crypto[tierKey]} (+${next.addRate} FC/day).`,
+    cls: 'gain',
+    character,
+  };
+}
+
+function doCollectCrypto(character) {
+  const crypto = ensureCryptoState(character);
+  const remaining = FC_COLLECT_MIN_INTERVAL_MS - (Date.now() - crypto.lastCollectedAt);
+  if (remaining > 0) return { ok: false, reason: `Come back in ${Math.ceil(remaining / (60 * 60 * 1000))}h.` };
+  const elapsedDays = (Date.now() - crypto.lastCollectedAt) / (24 * 60 * 60 * 1000);
+  const earned = round2(cryptoDailyRate(crypto) * elapsedDays);
+  crypto.fc = round2(crypto.fc + earned);
+  crypto.lastCollectedAt = Date.now();
+  return { ok: true, message: `Collected ${earned.toFixed(2)} FC.`, cls: 'gain', character };
+}
+
+function doSellFC(character, amount) {
+  const crypto = ensureCryptoState(character);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  if (amount > crypto.fc) return { ok: false, reason: "You don't have that much FC." };
+  crypto.fc = round2(crypto.fc - amount);
+  const payout = round2(amount * FC_START_PRICE);
+  character.cash = round2(character.cash + payout);
+  return { ok: true, message: `Sold ${amount} FC for $${payout.toFixed(2)}.`, cls: 'gain', character };
+}
+
+// Called from a successful NMC robbery against a victim with an FC balance -- the "wallet-drain"
+// risk from the design doc, same speed-scaled shape as the shipment-interception roll.
+function tryDrainCryptoWallet(attacker, target) {
+  const targetCrypto = ensureCryptoState(target);
+  if (targetCrypto.fc <= 0) return null;
+  const chance = Math.min(0.25, (attacker.stats.speed / 100) * 0.3);
+  if (Math.random() >= chance) return null;
+
+  const drained = round2(targetCrypto.fc * randFloat(0.1, 0.3));
+  if (drained <= 0) return null;
+  targetCrypto.fc = round2(targetCrypto.fc - drained);
+  const attackerCrypto = ensureCryptoState(attacker);
+  attackerCrypto.fc = round2(attackerCrypto.fc + drained);
+  return `You also cracked their wallet and drained ${drained.toFixed(2)} FC!`;
+}
+
+// ---------- Drugs & Rugs: Altcoins (rug-pull system) ----------
+// Rows live in a real shared DB table (altcoins.js in db.js), same reasoning as mtn_listings --
+// visible to every player, not just the creator. These are the pure math helpers gameLogic.js can
+// own without DB access; server.js glues them to the actual rows.
+const ALTCOIN_MINT_COST_FC = 10;
+const ALTCOIN_SUPPLY = 1000;
+const ALTCOIN_START_PRICE = 0.10;
+const ALTCOIN_END_PRICE = 0.15;
+const ALTCOIN_RUG_FLOOR_PCT = 0.05; // price craters to 5-10% of pre-rug value, not to zero
+const ALTCOIN_RUG_CEIL_PCT = 0.10;
+const ALTCOIN_NAME_MAX_LEN = 24;
+// City Hall's rename (doCityHallRename) only enforces a length cap, no profanity list -- but a
+// coin name is public and highly visible (every player sees it in the Altcoins list), so it needs
+// real moderation. Minimal starter list -- extend as needed.
+const PROFANITY_WORDS = ['fuck', 'shit', 'cunt', 'nigger', 'faggot', 'retard'];
+
+function altcoinPriceAt(sold) {
+  return ALTCOIN_START_PRICE + (ALTCOIN_END_PRICE - ALTCOIN_START_PRICE) * (sold / ALTCOIN_SUPPLY);
+}
+
+// Exact cost for `qty` coins bought starting at `sold` -- the price curve is linear, so the average
+// of the start/end unit price over the range times qty is exact, not an approximation.
+function altcoinBuyCost(sold, qty) {
+  const startPrice = altcoinPriceAt(sold);
+  const endPrice = altcoinPriceAt(sold + qty);
+  return round2(((startPrice + endPrice) / 2) * qty * 1000) / 1000; // keep 3 decimals, FC amounts are small
+}
+
+// Total FC actually raised so far (everyone's cumulative purchase cost) -- exact trapezoid from 0
+// to `sold` on the linear price curve. This is "the pool," and it's what makes rugging so much
+// better than a fair sale: a fair sale only nets your OWN stake's worth, but a rug drains the
+// entire pool -- both what you put in AND what every other buyer put in. See the worked example in
+// the design doc: 501 coins bought fairly nets ~68.9 FC, but rugging the same position nets the
+// full ~125 FC pool.
+function altcoinPoolRaised(sold) {
+  return round2(((ALTCOIN_START_PRICE + altcoinPriceAt(sold)) / 2) * sold * 1000) / 1000;
+}
+
+function validateAltcoinName(name) {
+  if (!name || typeof name !== 'string') return { ok: false, reason: 'Name is required.' };
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > ALTCOIN_NAME_MAX_LEN) {
+    return { ok: false, reason: `Name must be 2-${ALTCOIN_NAME_MAX_LEN} characters.` };
+  }
+  if (PROFANITY_WORDS.some((word) => trimmed.toLowerCase().includes(word))) {
+    return { ok: false, reason: 'That name is not allowed.' };
+  }
+  return { ok: true, name: trimmed };
+}
+
+// Rug (pre-sellout) and "Sell Now" (post-sellout) are mechanically identical -- the majority
+// holder drains the ENTIRE pool (not just their own stake's worth -- that's what makes rugging
+// dramatically more profitable than a fair sale, see altcoinPoolRaised above) and everyone else's
+// remaining stake craters. Full Buyout is the one genuinely different code path (see
+// altcoinFullBuyoutPayout below): it splits the same pool pro-rata instead of handing it all to one
+// player. `dumperQty` isn't used in the payout math -- it's kept as a parameter for callers that
+// want to log/display how large the dumper's own position was.
+function altcoinDumpPayout(coin, dumperQty) {
+  const preRugPrice = altcoinPriceAt(coin.sold);
+  const payoutFc = altcoinPoolRaised(coin.sold);
+  const crashPct = randFloat(ALTCOIN_RUG_FLOOR_PCT, ALTCOIN_RUG_CEIL_PCT);
+  const newPrice = round2(preRugPrice * crashPct * 10000) / 10000;
+  return { payoutFc, newPrice };
+}
+
+// Validates + deducts the mint cost only -- the actual row insert (and the "one active altcoin per
+// creator" check, which needs a DB query) happens in server.js.
+function doMintAltcoin(character, name) {
+  const validated = validateAltcoinName(name);
+  if (!validated.ok) return validated;
+  const crypto = ensureCryptoState(character);
+  if (crypto.fc < ALTCOIN_MINT_COST_FC) return { ok: false, reason: `Minting costs ${ALTCOIN_MINT_COST_FC} FC.` };
+  crypto.fc = round2(crypto.fc - ALTCOIN_MINT_COST_FC);
+  return { ok: true, name: validated.name, character };
+}
+
+// `coin` is a plain {sold, supply} snapshot -- server.js updates the real row's `sold` count after
+// a successful buy.
+function doBuyAltcoinCoins(character, coin, qty) {
+  if (!qty || qty < 1) return { ok: false, reason: 'Enter a valid quantity.' };
+  if (coin.sold + qty > ALTCOIN_SUPPLY) return { ok: false, reason: 'Not enough coins left in this run.' };
+  const crypto = ensureCryptoState(character);
+  const cost = altcoinBuyCost(coin.sold, qty);
+  if (crypto.fc < cost) return { ok: false, reason: 'Not enough FC.' };
+  crypto.fc = round2(crypto.fc - cost);
+  return { ok: true, cost, message: `Bought ${qty} coin(s) for ${cost.toFixed(3)} FC.`, cls: 'gain', character };
+}
+
+// Pays every current holder pro-rata at the final sellout price -- the "honest ending," a genuinely
+// different payout shape than the dump (everyone gets their share, not just the majority holder).
+function altcoinFullBuyoutPayout(coin, holdings) {
+  const pool = altcoinPoolRaised(coin.sold);
+  const totalHeld = holdings.reduce((sum, h) => sum + h.qty, 0);
+  if (totalHeld <= 0) return [];
+  return holdings.map((h) => ({
+    userId: h.userId,
+    payoutFc: round2((h.qty / totalHeld) * pool * 1000) / 1000,
+  }));
+}
+
 // ---------- Leaderboard (Looks / Net Worth / Level) ----------
 // Title ids must match the client's title catalog (core.js) exactly -- these are the only
 // server-known title ids, since granting/revoking them is the one case where the server needs to
@@ -2013,6 +2438,39 @@ module.exports = {
   doBuyGun,
   doBuyMelee,
   doBuyAmmo,
+  doBuyArmor,
+  ensureFarmsState,
+  doBuyFarmPlot,
+  doPrepFarmPlot,
+  doPlantFarmSeed,
+  doCollectFarmHarvest,
+  doBuyFarmSecurity,
+  advanceFarmPlot,
+  FARM_UNLOCK_UNITS_SOLD,
+  FARM_PLOT_COST,
+  FARM_PREP_COST,
+  FARM_SEED_COST_BY_DRUG,
+  FARM_SECURITY_MAX_TIER,
+  farmConfiscationChance,
+  ensureCryptoState,
+  doBuyCryptoUpgrade,
+  doCollectCrypto,
+  doSellFC,
+  cryptoDailyRate,
+  CRYPTO_UPGRADE_TIERS,
+  FC_START_PRICE,
+  FC_BASE_RATE_PER_DAY,
+  ALTCOIN_MINT_COST_FC,
+  ALTCOIN_SUPPLY,
+  ALTCOIN_START_PRICE,
+  ALTCOIN_END_PRICE,
+  altcoinPriceAt,
+  altcoinBuyCost,
+  altcoinPoolRaised,
+  doMintAltcoin,
+  doBuyAltcoinCoins,
+  altcoinDumpPayout,
+  altcoinFullBuyoutPayout,
   doApplyConcealedPermit,
   doApplyGoodJob,
   doResignGoodJob,

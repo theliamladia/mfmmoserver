@@ -66,6 +66,17 @@ const {
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
+  createAltcoin,
+  getActiveAltcoinByCreator,
+  getAllAltcoins,
+  getAltcoinById,
+  updateAltcoinSold,
+  setAltcoinStatus,
+  getAltcoinHoldings,
+  getAltcoinHoldingForUser,
+  getAltcoinMajorityHolder,
+  addAltcoinHolding,
+  zeroAltcoinHolding,
 } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
@@ -101,6 +112,7 @@ const {
   doBuyGun,
   doBuyMelee,
   doBuyAmmo,
+  doBuyArmor,
   doApplyConcealedPermit,
   doApplyGoodJob,
   doResignGoodJob,
@@ -139,6 +151,23 @@ const {
   LEADERBOARD_TITLES,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
+  ensureFarmsState,
+  doBuyFarmPlot,
+  doPrepFarmPlot,
+  doPlantFarmSeed,
+  doCollectFarmHarvest,
+  doBuyFarmSecurity,
+  advanceFarmPlot,
+  ensureCryptoState,
+  doBuyCryptoUpgrade,
+  doCollectCrypto,
+  doSellFC,
+  ALTCOIN_SUPPLY,
+  altcoinPriceAt,
+  doMintAltcoin,
+  doBuyAltcoinCoins,
+  altcoinDumpPayout,
+  altcoinFullBuyoutPayout,
 } = require('./gameLogic');
 
 const app = express();
@@ -802,7 +831,53 @@ app.post('/gunclub/ammo', requireAuth, (req, res) => {
   const { itemId } = req.body || {};
   runAction(req, res, doBuyAmmo, itemId, getServerState().modifier);
 });
+app.post('/gunclub/armor', requireAuth, (req, res) => {
+  const { itemId } = req.body || {};
+  runAction(req, res, doBuyArmor, itemId);
+});
 app.post('/gunclub/concealed-permit', requireAuth, (req, res) => runAction(req, res, doApplyConcealedPermit));
+
+// ---------- Milos Outlook Farms ----------
+app.get('/farms/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const farms = ensureFarmsState(character);
+  farms.plots.forEach((p) => advanceFarmPlot(p));
+  saveCharacter(user.id, character);
+  res.json({ ok: true, farms, unitsSold: character.drugDealer.unitsSold });
+});
+app.post('/farms/plot/buy', requireAuth, (req, res) => runAction(req, res, doBuyFarmPlot));
+app.post('/farms/plot/prep', requireAuth, (req, res) => {
+  const { plotId } = req.body || {};
+  runAction(req, res, doPrepFarmPlot, plotId);
+});
+app.post('/farms/plot/plant', requireAuth, (req, res) => {
+  const { plotId, drugId } = req.body || {};
+  runAction(req, res, doPlantFarmSeed, plotId, drugId);
+});
+app.post('/farms/plot/collect', requireAuth, (req, res) => {
+  const { plotId } = req.body || {};
+  runAction(req, res, doCollectFarmHarvest, plotId);
+});
+app.post('/farms/security/buy', requireAuth, (req, res) => runAction(req, res, doBuyFarmSecurity));
+
+// ---------- Floydcoin (crypto) ----------
+app.get('/crypto/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  res.json({ ok: true, crypto: ensureCryptoState(character) });
+});
+app.post('/crypto/upgrade', requireAuth, (req, res) => {
+  const { track } = req.body || {};
+  runAction(req, res, doBuyCryptoUpgrade, track);
+});
+app.post('/crypto/collect', requireAuth, (req, res) => runAction(req, res, doCollectCrypto));
+app.post('/crypto/sell', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doSellFC, Number(amount));
+});
 
 app.post('/jobs/good/apply', requireAuth, (req, res) => {
   const { jobId } = req.body || {};
@@ -1029,6 +1104,147 @@ app.post('/mtn/buy', requireAuth, (req, res) => {
   }
 
   res.json({ ...result, listings: getAllListings().map(serializeListing) });
+});
+
+// ---------- Altcoins (rug-pull system) ----------
+// Public view: name, remaining supply, current price, status. NEVER includes who holds coins or
+// at what price they bought in -- that stays server-side only, per the design doc's visibility rule.
+function serializeAltcoin(coin) {
+  return {
+    id: coin.id,
+    name: coin.name,
+    creatorName: coin.creator_name,
+    supply: coin.supply,
+    sold: coin.sold,
+    remaining: coin.supply - coin.sold,
+    status: coin.status,
+    price: coin.price_override !== null && coin.price_override !== undefined ? coin.price_override : altcoinPriceAt(coin.sold),
+  };
+}
+
+app.get('/altcoins/list', requireAuth, (req, res) => {
+  res.json({ ok: true, coins: getAllAltcoins().map(serializeAltcoin) });
+});
+
+// Private to the caller: their own holdings across every coin, plus whether they currently have an
+// active mint of their own (gates whether Mint is available).
+app.get('/altcoins/mine', requireAuth, (req, res) => {
+  const coins = getAllAltcoins();
+  const holdings = coins
+    .map((coin) => ({ coin, holding: getAltcoinHoldingForUser(coin.id, req.user.sub) }))
+    .filter((x) => x.holding && x.holding.qty > 0)
+    .map((x) => ({ altcoinId: x.coin.id, name: x.coin.name, qty: x.holding.qty, status: x.coin.status }));
+  const myActiveMint = getActiveAltcoinByCreator(req.user.sub);
+  res.json({ ok: true, holdings, myActiveMintId: myActiveMint ? myActiveMint.id : null });
+});
+
+app.post('/altcoins/mint', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  const { name } = req.body || {};
+  const existing = getActiveAltcoinByCreator(req.user.sub);
+  if (existing) return res.status(429).json({ ok: false, reason: 'You already have an active altcoin. Only one at a time.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const result = doMintAltcoin(character, name);
+  if (!result.ok) return res.status(429).json(result);
+
+  saveCharacter(user.id, character);
+  const creatorName = `${character.firstName} ${character.lastName}`;
+  const coinId = createAltcoin(result.name, user.id, creatorName, ALTCOIN_SUPPLY);
+  res.json({ ok: true, message: `Minted ${result.name}!`, cls: 'gain', character, coin: serializeAltcoin(getAltcoinById(coinId)) });
+});
+
+app.post('/altcoins/buy', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  const { altcoinId, qty } = req.body || {};
+  const coin = getAltcoinById(altcoinId);
+  if (!coin) return res.status(404).json({ ok: false, reason: 'Unknown coin.' });
+  if (coin.status !== 'active') return res.status(429).json({ ok: false, reason: 'This coin is no longer trading.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const result = doBuyAltcoinCoins(character, { sold: coin.sold, supply: coin.supply }, Number(qty));
+  if (!result.ok) return res.status(429).json(result);
+
+  saveCharacter(user.id, character);
+  updateAltcoinSold(coin.id, coin.sold + Number(qty));
+  addAltcoinHolding(coin.id, user.id, `${character.firstName} ${character.lastName}`, Number(qty), result.cost);
+  res.json({ ...result, character, coin: serializeAltcoin(getAltcoinById(coin.id)) });
+});
+
+// Rug (pre-sellout) and "Sell Now" (post-sellout) are the same action -- whoever currently holds
+// the plurality of coins drains the pool at the current price and the coin craters. Only the real
+// majority holder (recomputed live, not the original minter) can ever call this.
+app.post('/altcoins/dump', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  const { altcoinId } = req.body || {};
+  const coin = getAltcoinById(altcoinId);
+  if (!coin) return res.status(404).json({ ok: false, reason: 'Unknown coin.' });
+  if (coin.status !== 'active') return res.status(429).json({ ok: false, reason: 'This coin is no longer trading.' });
+
+  const majority = getAltcoinMajorityHolder(coin.id);
+  if (!majority || majority.user_id !== req.user.sub) {
+    return res.status(403).json({ ok: false, reason: 'Only the current majority holder can do this.' });
+  }
+
+  const user = getUserById(req.user.sub);
+  const character = JSON.parse(user.character_json);
+  const crypto = ensureCryptoState(character);
+  const { payoutFc, newPrice } = altcoinDumpPayout(coin, majority.qty);
+  crypto.fc = round2(crypto.fc + payoutFc);
+  saveCharacter(user.id, character);
+
+  zeroAltcoinHolding(majority.id);
+  setAltcoinStatus(coin.id, 'rugged', newPrice);
+
+  res.json({
+    ok: true,
+    message: `Dumped ${majority.qty} coins for ${payoutFc.toFixed(3)} FC. ${coin.name} crashed to ${newPrice.toFixed(4)} FC/coin.`,
+    cls: 'gain',
+    character,
+    coin: serializeAltcoin(getAltcoinById(coin.id)),
+  });
+});
+
+// The "honest ending" -- only offered once fully sold out, pays every holder pro-rata instead of
+// just draining value to the majority holder. Genuinely different code path from dump/Sell Now.
+app.post('/altcoins/buyout', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  const { altcoinId } = req.body || {};
+  const coin = getAltcoinById(altcoinId);
+  if (!coin) return res.status(404).json({ ok: false, reason: 'Unknown coin.' });
+  if (coin.status !== 'active') return res.status(429).json({ ok: false, reason: 'This coin is no longer trading.' });
+  if (coin.sold < coin.supply) return res.status(429).json({ ok: false, reason: 'This coin has not fully sold out yet.' });
+
+  const majority = getAltcoinMajorityHolder(coin.id);
+  if (!majority || majority.user_id !== req.user.sub) {
+    return res.status(403).json({ ok: false, reason: 'Only the current majority holder can do this.' });
+  }
+
+  const holdings = getAltcoinHoldings(coin.id).map((h) => ({ userId: h.user_id, qty: h.qty, holdingId: h.id }));
+  const payouts = altcoinFullBuyoutPayout(coin, holdings);
+  payouts.forEach(({ userId, payoutFc }) => {
+    const holderUser = getUserById(userId);
+    if (!holderUser) return;
+    const holderCharacter = JSON.parse(holderUser.character_json);
+    const crypto = ensureCryptoState(holderCharacter);
+    crypto.fc = round2(crypto.fc + payoutFc);
+    saveCharacter(holderUser.id, holderCharacter);
+  });
+  holdings.forEach((h) => zeroAltcoinHolding(h.holdingId));
+  setAltcoinStatus(coin.id, 'bought_out');
+
+  const callerUser = getUserById(req.user.sub);
+  res.json({
+    ok: true,
+    message: `Full Buyout complete -- every holder of ${coin.name} paid out pro-rata.`,
+    cls: 'gain',
+    character: JSON.parse(callerUser.character_json),
+    coin: serializeAltcoin(getAltcoinById(coin.id)),
+  });
 });
 
 const BAIL_RATE_PER_YEAR = 150; // matches Hire Lawyer's rate

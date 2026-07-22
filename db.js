@@ -589,6 +589,92 @@ function markPaymentNotificationsSeen(userId) {
   db.prepare('UPDATE payment_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
 }
 
+// Altcoins: a real shared table, same reasoning as mtn_listings -- an altcoin's remaining-supply
+// count has to be visible to every player, not just its creator. Holdings live in a separate table
+// (one row per user per coin) so per-user qty/cost-basis stays queryable without ever exposing it
+// in a public listing -- see the Altcoins routes in server.js for what actually gets serialized out.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS altcoins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    creator_user_id INTEGER NOT NULL,
+    creator_name TEXT NOT NULL,
+    supply INTEGER NOT NULL,
+    sold INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    price_override REAL,
+    created_at INTEGER NOT NULL
+  );
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS altcoin_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    altcoin_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    qty INTEGER NOT NULL DEFAULT 0,
+    cost_basis_fc REAL NOT NULL DEFAULT 0
+  );
+`);
+
+function createAltcoin(name, creatorUserId, creatorName, supply) {
+  const info = db.prepare(
+    'INSERT INTO altcoins (name, creator_user_id, creator_name, supply, sold, status, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)'
+  ).run(name, creatorUserId, creatorName, supply, 'active', Date.now());
+  return info.lastInsertRowid;
+}
+
+function getActiveAltcoinByCreator(creatorUserId) {
+  return db.prepare("SELECT * FROM altcoins WHERE creator_user_id = ? AND status = 'active'").get(creatorUserId);
+}
+
+function getAllAltcoins() {
+  return db.prepare('SELECT * FROM altcoins ORDER BY created_at DESC').all();
+}
+
+function getAltcoinById(id) {
+  return db.prepare('SELECT * FROM altcoins WHERE id = ?').get(id);
+}
+
+function updateAltcoinSold(id, sold) {
+  db.prepare('UPDATE altcoins SET sold = ? WHERE id = ?').run(sold, id);
+}
+
+function setAltcoinStatus(id, status, priceOverride = null) {
+  db.prepare('UPDATE altcoins SET status = ?, price_override = ? WHERE id = ?').run(status, priceOverride, id);
+}
+
+function getAltcoinHoldings(altcoinId) {
+  return db.prepare('SELECT * FROM altcoin_holdings WHERE altcoin_id = ? AND qty > 0').all(altcoinId);
+}
+
+function getAltcoinHoldingForUser(altcoinId, userId) {
+  return db.prepare('SELECT * FROM altcoin_holdings WHERE altcoin_id = ? AND user_id = ?').get(altcoinId, userId);
+}
+
+// Majority holder = whoever holds the plurality of coins sold so far, recomputed live every time
+// it's needed (rug/buyout eligibility) rather than cached, since holdings shift as coins change hands.
+function getAltcoinMajorityHolder(altcoinId) {
+  return db
+    .prepare('SELECT * FROM altcoin_holdings WHERE altcoin_id = ? AND qty > 0 ORDER BY qty DESC, user_id ASC LIMIT 1')
+    .get(altcoinId);
+}
+
+function addAltcoinHolding(altcoinId, userId, userName, qty, costBasisFc) {
+  const existing = getAltcoinHoldingForUser(altcoinId, userId);
+  if (existing) {
+    db.prepare('UPDATE altcoin_holdings SET qty = qty + ?, cost_basis_fc = cost_basis_fc + ? WHERE id = ?')
+      .run(qty, costBasisFc, existing.id);
+  } else {
+    db.prepare('INSERT INTO altcoin_holdings (altcoin_id, user_id, user_name, qty, cost_basis_fc) VALUES (?, ?, ?, ?, ?)')
+      .run(altcoinId, userId, userName, qty, costBasisFc);
+  }
+}
+
+function zeroAltcoinHolding(holdingId) {
+  db.prepare('UPDATE altcoin_holdings SET qty = 0 WHERE id = ?').run(holdingId);
+}
+
 module.exports = {
   db,
   createUser,
@@ -652,4 +738,15 @@ module.exports = {
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
+  createAltcoin,
+  getActiveAltcoinByCreator,
+  getAllAltcoins,
+  getAltcoinById,
+  updateAltcoinSold,
+  setAltcoinStatus,
+  getAltcoinHoldings,
+  getAltcoinHoldingForUser,
+  getAltcoinMajorityHolder,
+  addAltcoinHolding,
+  zeroAltcoinHolding,
 };
