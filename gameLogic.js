@@ -716,7 +716,7 @@ function doBuyFood(character, itemId) {
   const lbs = item.calories / CALORIES_PER_LB;
   character.fatGained += lbs;
   character.stats.speed = clampStat(character.stats.speed - lbs * SPEED_LOSS_PER_LB);
-  character.gym.bodyScore = round2((character.gym.bodyScore || 0) - FOOD_LOOKS_LOSS);
+  character.gym.bodyScore = Math.max(0, round2((character.gym.bodyScore || 0) - FOOD_LOOKS_LOSS));
   recomputeLooks(character);
 
   const achievements = ensureAchievementsState(character);
