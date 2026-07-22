@@ -732,14 +732,25 @@ app.get('/duels/:id', requireAuth, (req, res) => {
 // stat gains, etc.). The client pushes its full local character after every save() so the roster
 // and other read-only views elsewhere stay current. Not a security boundary -- same as every
 // other client-driven mutation until it's ported to a real do<X>() endpoint like /hustle/work.
-app.post('/character/sync', requireAuth, (req, res) => {
-  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+//
+// Also reachable via navigator.sendBeacon on tab close/background, which can't set an
+// Authorization header -- so, same as /milos/leave, this route accepts the token in the body as a
+// fallback and verifies it manually. This matters because save() debounces this push by 1s; without
+// a beacon-based flush on visibilitychange/pagehide, anything saved in that last second (a crate
+// win, a title purchase) is silently lost if the tab closes before the timer fires.
+app.post('/character/sync', (req, res) => {
+  const header = req.headers.authorization || '';
+  const headerToken = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = headerToken || (req.body && req.body.token);
+  const payload = token ? verifyToken(token) : null;
+  if (!payload) return res.status(401).json({ ok: false, reason: 'Invalid or expired token.' });
+  if (isMaintenanceBlocked({ user: payload })) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
 
   const { character } = req.body || {};
   if (!character || typeof character !== 'object') {
     return res.status(400).json({ ok: false, reason: 'Missing character.' });
   }
-  saveCharacter(req.user.sub, character);
+  saveCharacter(payload.sub, character);
   res.json({ ok: true });
 });
 
