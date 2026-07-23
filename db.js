@@ -243,6 +243,48 @@ function saveCharacter(userId, character) {
   db.prepare('UPDATE users SET character_json = ? WHERE id = ?').run(JSON.stringify(character), userId);
 }
 
+// Transaction log: an audit trail of every action that actually moves a player's cash (Floydbucks)
+// balance -- workouts, title equips, etc. never touch cash and so never produce a row here. A
+// real shared table (not character_json) since it has to survive a character reset/wipe and needs
+// to be browsable across all players at once, not just one at a time.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    delta REAL NOT NULL,
+    balance_after REAL NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions (created_at)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions (user_id)');
+
+function logTransaction(userId, userName, action, delta, balanceAfter) {
+  db.prepare(
+    'INSERT INTO transactions (user_id, user_name, action, delta, balance_after, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(userId, userName, action, delta, balanceAfter, Date.now());
+}
+
+function getRecentTransactions(limit, beforeId) {
+  if (beforeId) {
+    return db.prepare('SELECT * FROM transactions WHERE id < ? ORDER BY id DESC LIMIT ?').all(beforeId, limit);
+  }
+  return db.prepare('SELECT * FROM transactions ORDER BY id DESC LIMIT ?').all(limit);
+}
+
+function getTransactionsForUser(userId, limit) {
+  return db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
+}
+
+// Bounds disk usage on a small droplet -- called once at boot and on a daily interval (see
+// server.js), not a real OS-level cron job.
+function pruneOldTransactions(maxAgeMs) {
+  const cutoff = Date.now() - maxAgeMs;
+  return db.prepare('DELETE FROM transactions WHERE created_at < ?').run(cutoff).changes;
+}
+
 function touchLastSeen(userId) {
   db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(Date.now(), userId);
 }
@@ -775,6 +817,10 @@ module.exports = {
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
+  logTransaction,
+  getRecentTransactions,
+  getTransactionsForUser,
+  pruneOldTransactions,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,

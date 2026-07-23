@@ -66,6 +66,10 @@ const {
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
+  logTransaction,
+  getRecentTransactions,
+  getTransactionsForUser,
+  pruneOldTransactions,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
@@ -376,10 +380,12 @@ app.post('/players/pay', requireAuth, (req, res) => {
   if (payerCharacter.cash < amount) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
 
   payerCharacter.cash = round2(payerCharacter.cash - amount);
+  logTransaction(payerUser.id, `${payerCharacter.firstName} ${payerCharacter.lastName}`, 'players/pay', -round2(amount), payerCharacter.cash);
   saveCharacter(payerUser.id, payerCharacter);
 
   const targetCharacter = JSON.parse(target.character_json);
   targetCharacter.cash = round2(targetCharacter.cash + amount);
+  logTransaction(target.id, `${targetCharacter.firstName} ${targetCharacter.lastName}`, 'players/pay:received', round2(amount), targetCharacter.cash);
   saveCharacter(target.id, targetCharacter);
   createPaymentNotification(target.id, `${payerCharacter.firstName} ${payerCharacter.lastName}`, round2(amount));
 
@@ -454,6 +460,10 @@ app.post('/players/rob', requireAuth, (req, res) => {
   const result = doRobPlayer(attackerCharacter, targetCharacter, targetUser.id, getServerState().modifier);
   if (!result.ok) return res.status(429).json(result);
 
+  if (result.gain) {
+    logTransaction(attackerUser.id, `${attackerCharacter.firstName} ${attackerCharacter.lastName}`, 'players/rob', result.gain, attackerCharacter.cash);
+    logTransaction(targetUser.id, `${targetCharacter.firstName} ${targetCharacter.lastName}`, 'players/rob:victim', -result.gain, targetCharacter.cash);
+  }
   saveCharacter(attackerUser.id, attackerCharacter);
   saveCharacter(targetUser.id, targetCharacter);
   if (result.gain) {
@@ -504,6 +514,7 @@ app.post('/coinflip/create', requireAuth, (req, res) => {
   if (character.cash < wager) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
 
   character.cash = round2(character.cash - wager);
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'coinflip/create', -round2(wager), character.cash);
   saveCharacter(user.id, character);
   const lobbyId = createCoinflipLobby(user.id, `${character.firstName} ${character.lastName}`, round2(wager), side);
 
@@ -532,10 +543,14 @@ app.post('/coinflip/join', requireAuth, (req, res) => {
 
   const claim = joinCoinflipLobby(lobby.id, joinerUser.id, `${joinerCharacter.firstName} ${joinerCharacter.lastName}`);
   if (claim.changes === 0) {
+    // Race lost (someone else claimed it, or it was cancelled) -- refund is a pure no-op, not a
+    // real economic event, so it's deliberately not logged.
     joinerCharacter.cash = round2(joinerCharacter.cash + lobby.wager);
     saveCharacter(joinerUser.id, joinerCharacter);
     return res.status(409).json({ ok: false, reason: 'That lobby is no longer available.', character: joinerCharacter });
   }
+
+  logTransaction(joinerUser.id, `${joinerCharacter.firstName} ${joinerCharacter.lastName}`, 'coinflip/join', -round2(lobby.wager), joinerCharacter.cash);
 
   const resultSide = Math.random() < 0.5 ? 'heads' : 'tails';
   const winnerIsCreator = resultSide === lobby.creator_side;
@@ -547,10 +562,12 @@ app.post('/coinflip/join', requireAuth, (req, res) => {
     if (creatorUser) {
       const creatorCharacter = JSON.parse(creatorUser.character_json);
       creatorCharacter.cash = round2(creatorCharacter.cash + pot);
+      logTransaction(creatorUser.id, `${creatorCharacter.firstName} ${creatorCharacter.lastName}`, 'coinflip/win', pot, creatorCharacter.cash);
       saveCharacter(creatorUser.id, creatorCharacter);
     }
   } else {
     joinerCharacter.cash = round2(joinerCharacter.cash + pot);
+    logTransaction(joinerUser.id, `${joinerCharacter.firstName} ${joinerCharacter.lastName}`, 'coinflip/win', pot, joinerCharacter.cash);
     saveCharacter(joinerUser.id, joinerCharacter);
   }
 
@@ -573,6 +590,7 @@ app.post('/coinflip/cancel', requireAuth, (req, res) => {
   const user = getUserById(lobby.creator_user_id);
   const character = JSON.parse(user.character_json);
   character.cash = round2(character.cash + lobby.wager);
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'coinflip/cancel:refund', round2(lobby.wager), character.cash);
   saveCharacter(user.id, character);
   cancelCoinflipLobby(lobby.id);
 
@@ -609,7 +627,13 @@ function finishDuel(duel, winnerUserId) {
   const winnerCharacter = winnerIsAttacker ? attackerCharacter : targetCharacter;
   const loserCharacter = winnerIsAttacker ? targetCharacter : attackerCharacter;
 
-  applyDuelOutcome(winnerCharacter, loserCharacter);
+  const reward = applyDuelOutcome(winnerCharacter, loserCharacter);
+  if (reward) {
+    const winnerUser = winnerIsAttacker ? attackerUser : targetUser;
+    const loserUser = winnerIsAttacker ? targetUser : attackerUser;
+    logTransaction(winnerUser.id, `${winnerCharacter.firstName} ${winnerCharacter.lastName}`, 'duels/win', reward, winnerCharacter.cash);
+    logTransaction(loserUser.id, `${loserCharacter.firstName} ${loserCharacter.lastName}`, 'duels/loss', -reward, loserCharacter.cash);
+  }
   saveCharacter(attackerUser.id, attackerCharacter);
   saveCharacter(targetUser.id, targetCharacter);
   updateDuel(duel.id, { status: 'finished', winner_user_id: winnerUserId, last_action_at: Date.now() });
@@ -792,6 +816,12 @@ app.post('/character/sync', (req, res) => {
 
 // Loads the caller's character, runs a do<X>(character, ...args) action against it, and persists
 // the result if it succeeded. Every server-authoritative action route is this same shape.
+// Every single-character action (work, buy, sell, gamble, etc.) funnels through here, so this is
+// the one place a before/after cash diff catches all of them for the transaction log -- no need to
+// instrument each of the 60+ individual routes below. `actionFn.name` (e.g. "doWork", "doBuyFood")
+// doubles as a free, readable action label. The handful of two-character routes (pay, rob,
+// coinflip, mtn, bail/commissary, duels) don't go through here and log explicitly at their own
+// cash-mutation points instead.
 function runAction(req, res, actionFn, ...args) {
   if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
   if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
@@ -800,9 +830,15 @@ function runAction(req, res, actionFn, ...args) {
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
 
   const character = JSON.parse(user.character_json);
+  const cashBefore = character.cash;
   const result = actionFn(character, ...args);
 
   if (!result.ok) return res.status(429).json(result);
+
+  const delta = round2(character.cash - cashBefore);
+  if (delta !== 0) {
+    logTransaction(user.id, `${character.firstName} ${character.lastName}`, actionFn.name, delta, character.cash);
+  }
 
   saveCharacter(user.id, character);
   res.json(result);
@@ -1143,12 +1179,14 @@ app.post('/mtn/buy', requireAuth, (req, res) => {
     deleteListing(listing.id);
     saveCharacter(buyerUser.id, buyerCharacter);
   } else {
+    logTransaction(buyerUser.id, `${buyerCharacter.firstName} ${buyerCharacter.lastName}`, 'mtn/buy', -total, buyerCharacter.cash);
     const sellerUser = getUserById(listing.seller_user_id);
     deleteListing(listing.id);
     saveCharacter(buyerUser.id, buyerCharacter);
     if (sellerUser) {
       const sellerCharacter = JSON.parse(sellerUser.character_json);
       creditSellerForSale(sellerCharacter, listing.item_id, listing.qty, total, `${buyerCharacter.firstName} ${buyerCharacter.lastName}`);
+      logTransaction(sellerUser.id, `${sellerCharacter.firstName} ${sellerCharacter.lastName}`, 'mtn/sell', total, sellerCharacter.cash);
       saveCharacter(sellerUser.id, sellerCharacter);
     }
   }
@@ -1352,6 +1390,7 @@ app.post('/penitentiary/bail', requireAuth, (req, res) => {
   if (payerCharacter.cash < cost) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks.' });
 
   payerCharacter.cash = round2(payerCharacter.cash - cost);
+  logTransaction(payerUser.id, `${payerCharacter.firstName} ${payerCharacter.lastName}`, 'penitentiary/bail', -cost, payerCharacter.cash);
   releasePenitentiaryRecord(record.id);
 
   if (record.user_id === payerUser.id) {
@@ -1401,11 +1440,13 @@ app.post('/penitentiary/commissary', requireAuth, (req, res) => {
     payerCharacter.cash = round2(payerCharacter.cash + amount);
     saveCharacter(payerUser.id, payerCharacter);
   } else {
+    logTransaction(payerUser.id, `${payerCharacter.firstName} ${payerCharacter.lastName}`, 'penitentiary/commissary', -amount, payerCharacter.cash);
     saveCharacter(payerUser.id, payerCharacter);
     const inmateUser = getUserById(record.user_id);
     if (inmateUser) {
       const inmateCharacter = JSON.parse(inmateUser.character_json);
       inmateCharacter.cash = round2(inmateCharacter.cash + amount);
+      logTransaction(inmateUser.id, `${inmateCharacter.firstName} ${inmateCharacter.lastName}`, 'penitentiary/commissary:received', amount, inmateCharacter.cash);
       saveCharacter(inmateUser.id, inmateCharacter);
     }
   }
@@ -1491,6 +1532,32 @@ app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {
     inventory: character.inventory,
     equipment: character.equipment,
   });
+});
+
+function serializeTransaction(row) {
+  return {
+    id: row.id,
+    userName: row.user_name,
+    action: row.action,
+    delta: row.delta,
+    balanceAfter: row.balance_after,
+    createdAt: row.created_at,
+  };
+}
+
+const TRANSACTIONS_PAGE_SIZE = 200;
+
+// Optional ?username=<name> filters to one player; optional ?beforeId=<id> pages backward through
+// the full log (newest first) without re-fetching everything already seen.
+app.get('/admin/transactions', requireAuth, requireAdminPassword, (req, res) => {
+  const { username, beforeId } = req.query || {};
+  if (username) {
+    const user = getUserByUsername(String(username).trim());
+    if (!user) return res.status(404).json({ ok: false, reason: `No player named "${username}" found.` });
+    return res.json({ ok: true, transactions: getTransactionsForUser(user.id, TRANSACTIONS_PAGE_SIZE).map(serializeTransaction) });
+  }
+  const parsedBeforeId = beforeId ? Number(beforeId) : null;
+  res.json({ ok: true, transactions: getRecentTransactions(TRANSACTIONS_PAGE_SIZE, parsedBeforeId).map(serializeTransaction) });
 });
 
 // New Milos City chat. senderName is always derived from the caller's own authoritative
@@ -1827,6 +1894,17 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection (server staying up):', err);
 });
+
+// Bounds the transaction log's disk footprint on the droplet -- no OS-level cron, just an interval
+// that outlives the process's own lifetime (runs once at boot, then daily).
+const TRANSACTION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const TRANSACTION_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
+function pruneTransactionLog() {
+  const removed = pruneOldTransactions(TRANSACTION_RETENTION_MS);
+  if (removed > 0) console.log(`Pruned ${removed} transaction log row(s) older than 90 days.`);
+}
+pruneTransactionLog();
+setInterval(pruneTransactionLog, TRANSACTION_PRUNE_INTERVAL_MS);
 
 app.listen(PORT, () => {
   console.log(`mfmmoalpha-server listening on port ${PORT}`);
