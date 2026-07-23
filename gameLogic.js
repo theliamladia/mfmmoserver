@@ -1295,6 +1295,27 @@ function doBuyFromDealer(character, dealerId, qty) {
   return { ok: true, message: `Bought ${qty}x ${drug.name} from ${dealer.name} for $${cost.toLocaleString()}.`, cls: 'gain', character };
 }
 
+// Same shape as crimeFailChance()'s stat mitigation (Speed+Attack reduce a base risk, floored at
+// a minimum) -- selling risk is "getting caught/busted", same theme as a crime bust.
+const DRUG_SELL_RISK_MIN = 0.03;
+const DRUG_SELL_STAT_MITIGATION = 0.5; // max reduction to risk from Speed+Attack at 100/100
+
+function drugSellRiskChance(character, drug, qty) {
+  const baseRisk = Math.min(0.9, drug.riskBase + (qty - 1) * drug.riskPerUnit);
+  const statScore = (character.stats.speed + character.stats.attack) / (2 * STAT_CAP);
+  const reduction = Math.min(DRUG_SELL_STAT_MITIGATION, statScore * DRUG_SELL_STAT_MITIGATION);
+  return Math.max(DRUG_SELL_RISK_MIN, baseRisk - reduction);
+}
+
+// Looks is this game's "charisma" stat elsewhere (speeds up job skill training) -- here it's a
+// smooth-talking/street-cred revenue bonus on top of the flat per-unit price roll.
+const DRUG_SELL_LOOKS_BONUS_MAX = 0.25; // up to +25% revenue at 100 Looks
+
+function drugSellRevenueMultiplier(character) {
+  const looksScore = Math.min(character.stats.looks, STAT_CAP) / STAT_CAP;
+  return 1 + looksScore * DRUG_SELL_LOOKS_BONUS_MAX;
+}
+
 // Mirrors the client's doSellDrugs() exactly, plus one addition: the client trusted its own UI to
 // clamp the sell quantity to what you actually own, but a direct API call has no such UI in the
 // way, so an unowned-quantity sale would otherwise mint Floydbucks from nothing. Added an
@@ -1305,7 +1326,7 @@ function doSellDrugs(character, drugId, qty) {
   if (!qty || qty < 1) return { ok: false, reason: 'Enter a valid quantity.' };
   if (qty > inventoryQty(character, drugId)) return { ok: false, reason: "You don't have that many to sell." };
 
-  const riskChance = Math.min(0.9, drug.riskBase + (qty - 1) * drug.riskPerUnit);
+  const riskChance = drugSellRiskChance(character, drug, qty);
   if (Math.random() < riskChance) {
     const years = Math.max(1, Math.round(drug.jailYearsPerUnit * qty));
     removeFromInventory(character, drugId, qty);
@@ -1317,7 +1338,7 @@ function doSellDrugs(character, drugId, qty) {
     return { ok: true, jailed: true, message: `Busted selling ${qty}x ${drug.name}! Sentenced to ${years} year(s).`, cls: 'loss', character };
   }
 
-  const unitPrice = randFloat(drug.sellMin, drug.sellMax);
+  const unitPrice = randFloat(drug.sellMin, drug.sellMax) * drugSellRevenueMultiplier(character);
   const total = round2(unitPrice * qty);
   character.cash = round2(character.cash + total);
   removeFromInventory(character, drugId, qty);
