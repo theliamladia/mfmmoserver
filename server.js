@@ -1502,6 +1502,7 @@ function serializeChatMessage(row) {
     id: row.id,
     senderName: row.sender_name,
     titleText: row.title_text,
+    titleId: row.title_id,
     message: row.message,
     sentAt: row.sent_at,
   };
@@ -1515,7 +1516,7 @@ app.get('/chat/messages', requireAuth, (req, res) => {
 });
 
 app.post('/chat/send', requireAuth, (req, res) => {
-  const { titleText, message } = req.body || {};
+  const { titleText, message, titleId } = req.body || {};
   const trimmed = (message || '').trim();
   if (!trimmed) return res.status(400).json({ ok: false, reason: 'Enter a message.' });
 
@@ -1524,8 +1525,9 @@ app.post('/chat/send', requireAuth, (req, res) => {
   const character = JSON.parse(user.character_json);
   const senderName = `${character.firstName} ${character.lastName}`;
   const safeTitleText = (titleText || 'CIVILIAN').slice(0, CHAT_TITLE_MAX_LEN);
+  const safeTitleId = typeof titleId === 'string' ? titleId.slice(0, CHAT_TITLE_MAX_LEN) : null;
 
-  createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN));
+  createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN), safeTitleId);
   res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
 });
 

@@ -191,13 +191,18 @@ db.exec(`
     sent_at INTEGER NOT NULL
   );
 `);
+// Bolt-on column: lets the client apply the equipped title's name-recolor style to chat senders,
+// same trust level as title_text (client-supplied, never validated server-side).
+if (!db.prepare('PRAGMA table_info(chat_messages)').all().some((c) => c.name === 'title_id')) {
+  db.exec('ALTER TABLE chat_messages ADD COLUMN title_id TEXT');
+}
 const CHAT_HISTORY_LIMIT = 50;
 
-function createChatMessage(userId, senderName, titleText, message) {
+function createChatMessage(userId, senderName, titleText, message, titleId) {
   const stmt = db.prepare(
-    'INSERT INTO chat_messages (user_id, sender_name, title_text, message, sent_at) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO chat_messages (user_id, sender_name, title_text, message, sent_at, title_id) VALUES (?, ?, ?, ?, ?, ?)'
   );
-  const info = stmt.run(userId, senderName, titleText, message, Date.now());
+  const info = stmt.run(userId, senderName, titleText, message, Date.now(), titleId || null);
   return info.lastInsertRowid;
 }
 
