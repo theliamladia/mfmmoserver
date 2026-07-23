@@ -66,6 +66,9 @@ const {
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
+  createSlimeNotification,
+  getUnseenSlimeNotifications,
+  markSlimeNotificationsSeen,
   logTransaction,
   getRecentTransactions,
   getTransactionsForUser,
@@ -134,6 +137,8 @@ const {
   doSellDrugs,
   doRobbery,
   doRobPlayer,
+  doSlimePlayer,
+  isSlimed,
   doStartFight,
   doCombatAction,
   doFlee,
@@ -472,6 +477,59 @@ app.post('/players/rob', requireAuth, (req, res) => {
   }
 
   res.json({ ok: true, jailed: result.jailed, message: result.message, cls: result.cls, character: attackerCharacter });
+});
+
+app.post('/players/slime', requireAuth, (req, res) => {
+  const { targetUsername } = req.body || {};
+  const targetUser = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!targetUser) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (targetUser.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't slime yourself." });
+
+  const shooterUser = getUserById(req.user.sub);
+  if (!shooterUser) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const shooterCharacter = JSON.parse(shooterUser.character_json);
+  if (isSlimed(shooterCharacter)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+  const targetCharacter = JSON.parse(targetUser.character_json);
+  if (isSlimed(targetCharacter)) return res.status(429).json({ ok: false, reason: `${targetCharacter.firstName} is already slimed.` });
+
+  const result = doSlimePlayer(shooterCharacter, targetCharacter, targetUser.id);
+  if (!result.ok) return res.status(429).json(result);
+
+  saveCharacter(shooterUser.id, shooterCharacter);
+  saveCharacter(targetUser.id, targetCharacter);
+
+  // `target` is always the passive side here (the API caller -- `shooter` -- already gets the
+  // full outcome synchronously in this response, whichever way it went), so any async
+  // notification only ever goes to target: either "someone tried to slime you and it was
+  // blocked" or, if they actually got slimed, the lockout notice itself.
+  if (result.armorBlocked) {
+    createSlimeNotification(targetUser.id, `${shooterCharacter.firstName} ${shooterCharacter.lastName}`, 'blocked', null);
+  } else if (result.slimedSide === 'target') {
+    createSlimeNotification(targetUser.id, `${shooterCharacter.firstName} ${shooterCharacter.lastName}`, 'slimed', targetCharacter.slime.until);
+  }
+
+  res.json({
+    ok: true,
+    jailed: result.jailed,
+    armorBlocked: result.armorBlocked,
+    duel: result.duel,
+    message: result.message,
+    cls: result.cls,
+    character: shooterCharacter,
+  });
+});
+
+function serializeSlimeNotification(row) {
+  return { id: row.id, shooterName: row.shooter_name, outcome: row.outcome, until: row.until, createdAt: row.created_at };
+}
+
+app.get('/notifications/slimes', requireAuth, (req, res) => {
+  res.json({ ok: true, notifications: getUnseenSlimeNotifications(req.user.sub).map(serializeSlimeNotification) });
+});
+
+app.post('/notifications/slimes/seen', requireAuth, (req, res) => {
+  markSlimeNotificationsSeen(req.user.sub);
+  res.json({ ok: true });
 });
 
 // Titles are trust-based/client-side (see gameLogic.js's comment on that exception), but the name-
@@ -831,6 +889,7 @@ function runAction(req, res, actionFn, ...args) {
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
 
   const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
   const cashBefore = character.cash;
   const result = actionFn(character, ...args);
 

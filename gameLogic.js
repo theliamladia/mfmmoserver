@@ -442,6 +442,8 @@ function newCharacter(firstName, lastName) {
     farms: { plots: [], securityTier: 0 },
     crypto: { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() },
     crimeRecord: { streak: 0 },
+    slime: { active: false, until: 0, byName: null },
+    slimeRecord: [],
     moralsCenter: { choice: null, lastTickTs: Date.now() },
     mtnHistory: [],
     maxxPurchased: [],
@@ -1392,6 +1394,10 @@ function doRobbery(character, activeModifier) {
 // actually moves between two real characters, and the cooldown is keyed to this specific
 // attacker-target pair so hitting someone doesn't lock you out of robbing anyone else.
 const PVP_ROBBERY_COOLDOWN_MS = 5 * 60 * 1000;
+// Reward is now a cut of what the victim actually has, not a flat range -- robbing a broke player
+// nets little, robbing a rich one is genuinely worth the risk. Fight-back-win pays half as much,
+// same ratio the old flat-range version used.
+const ROBBERY_PCT = 0.20;
 
 function doRobPlayer(attacker, target, targetUserId, activeModifier) {
   if (activeModifier === 'peace') return { ok: false, reason: 'Robbery is disabled -- Peace & Prosperity.' };
@@ -1406,7 +1412,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
   const findOutChance = Math.max(0.1, Math.min(0.55, 0.55 - (speed / 100) * 0.35 - (looks / 100) * 0.10));
 
   if (Math.random() >= findOutChance) {
-    const gain = Math.min(round2(randFloat(ROBBERY_MIN, ROBBERY_MAX)), target.cash);
+    const gain = round2(target.cash * ROBBERY_PCT);
     attacker.cash = round2(attacker.cash + gain);
     target.cash = round2(target.cash - gain);
     attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
@@ -1417,7 +1423,7 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
 
   const winChance = Math.max(0.15, Math.min(0.85, 0.5 + (attacker.stats.attack - target.stats.attack) * 0.015));
   if (Math.random() < winChance) {
-    const gain = Math.min(round2(randFloat(ROBBERY_MIN, ROBBERY_MAX) * 0.5), target.cash);
+    const gain = round2(target.cash * ROBBERY_PCT * 0.5);
     attacker.cash = round2(attacker.cash + gain);
     target.cash = round2(target.cash - gain);
     attacker.alliance = clampStat(attacker.alliance + ALLIANCE_DEBUFF);
@@ -1447,6 +1453,219 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
     message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${years} year(s)${streakNote}.`,
     cls: 'loss',
     attacker,
+    target,
+  };
+}
+
+// ---------- Sliming ----------
+// A gun-required PvP action: consume an equipped gun to shoot another player. Unarmed target ->
+// straight hit-chance roll scaled by the shooter's Shooting skill. Armed target -> both burn their
+// gun and roll 1-20, higher roll wins (ties favor the shooter). Whoever loses gets "slimed" (locked
+// out of the game for 10 minutes) UNLESS they have Body Armor equipped, in which case the armor
+// silently blocks it (consumed either way) and the would-be winner is jailed for the attempt instead.
+const SLIME_COOLDOWN_MS = 5 * 60 * 1000;
+const SLIME_LOCKOUT_MS = 10 * 60 * 1000;
+const SLIME_JAIL_YEARS = 2;
+const SLIME_BASE_HIT_CHANCE = 0.5;
+const SLIME_SHOOTING_HIT_BONUS_MAX = 0.4; // up to +40% hit chance at 100 Shooting skill
+const SLIME_HIT_CHANCE_MAX = 0.9;
+// Mirrors the client's (client-only, unenforced) doIllegalGearCheck()/JAIL_YEARS_WEAPON in
+// js/milos.js exactly -- same 50% bust chance, same 20-year sentence -- but for real, server-side,
+// since firing the gun during a Sliming attempt is the one moment that system is fully
+// authoritative. openCarry is unconditionally illegal; holsterL/holsterR need the permit.
+const ILLEGAL_GUN_BUST_CHANCE = 0.5;
+const JAIL_YEARS_ILLEGAL_GUN = 20;
+
+function ensureSlimeState(character) {
+  if (!character.slime) character.slime = { active: false, until: 0, byName: null };
+  if (!character.slimeRecord) character.slimeRecord = [];
+  return character.slime;
+}
+
+function isSlimed(character) {
+  const slime = ensureSlimeState(character);
+  return slime.active && Date.now() < slime.until;
+}
+
+// Returns the equipped gun's slot name ('holsterL'/'holsterR'/'openCarry'), or null if unarmed.
+function equippedGunSlot(character) {
+  if (GUN_ITEMS_BY_ID[character.equipment.holsterL]) return 'holsterL';
+  if (GUN_ITEMS_BY_ID[character.equipment.holsterR]) return 'holsterR';
+  if (GUN_ITEMS_BY_ID[character.equipment.openCarry]) return 'openCarry';
+  return null;
+}
+
+// Mirrors consumeArmorIfEquipped()'s shape -- unequips + burns one unit, but from whichever gun
+// slot is actually holding one.
+function consumeEquippedGun(character) {
+  const slot = equippedGunSlot(character);
+  if (!slot) return;
+  const gunId = character.equipment[slot];
+  character.equipment[slot] = null;
+  removeFromInventory(character, gunId, 1);
+}
+
+function isGunSlotIllegal(character, slot) {
+  if (slot === 'openCarry') return true;
+  return !character.licenses.concealedPermit;
+}
+
+// Busts `character` for the gun in `slot` if it's illegally carried and the roll catches them --
+// forfeits that gun and jails them. Returns whether it happened so the caller can react (e.g. an
+// armed defender whose gun gets confiscated mid-shootout never gets to use it).
+function checkIllegalGunBust(character, slot) {
+  if (!isGunSlotIllegal(character, slot)) return false;
+  if (Math.random() >= ILLEGAL_GUN_BUST_CHANCE) return false;
+  const gunId = character.equipment[slot];
+  character.equipment[slot] = null;
+  removeFromInventory(character, gunId, 1);
+  character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+  character.jail.inJail = true;
+  character.jail.crime = 'Illegal Firearm Possession';
+  character.jail.yearsRemaining = JAIL_YEARS_ILLEGAL_GUN;
+  character.jail.serving = false;
+  return true;
+}
+
+function slimeShootingHitChance(character) {
+  const skillScore = Math.min(character.weaponSkills.shooting, STAT_CAP) / STAT_CAP;
+  return Math.min(SLIME_HIT_CHANCE_MAX, SLIME_BASE_HIT_CHANCE + skillScore * SLIME_SHOOTING_HIT_BONUS_MAX);
+}
+
+// Sentences `character` for a failed (armor-blocked) sliming attempt -- same template every other
+// PvP failure (robbery, crime) already uses: crimeRecord streak escalation + alliance floor-snap.
+function jailForFailedSlime(character) {
+  const years = SLIME_JAIL_YEARS + character.crimeRecord.streak;
+  character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
+  character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+  character.jail.inJail = true;
+  character.jail.crime = 'Attempted Sliming';
+  character.jail.yearsRemaining = years;
+  character.jail.serving = false;
+  return years;
+}
+
+function slimeCharacter(character, byName) {
+  const slime = ensureSlimeState(character);
+  slime.active = true;
+  slime.until = Date.now() + SLIME_LOCKOUT_MS;
+  slime.byName = byName;
+  character.slimeRecord.push({ byName, at: Date.now() });
+}
+
+// `shooter`/`target` are the two character objects; targetUserId is only used for the cooldown key
+// (same idiom as doRobPlayer). Returns which side ended up jailed/slimed (if either) as plain
+// 'shooter'/'target' tags, plus duel roll info when a gunfight happened, so server.js can create
+// the right notification without re-deriving any of this from the mutated characters.
+function doSlimePlayer(shooter, target, targetUserId) {
+  ensureSlimeState(shooter);
+  ensureSlimeState(target);
+
+  const cooldownKey = `slime_${targetUserId}`;
+  const remaining = getRemainingCooldown(shooter, cooldownKey, SLIME_COOLDOWN_MS);
+  if (remaining > 0) return { ok: false, reason: `You need to wait ${Math.ceil(remaining / 1000)}s before sliming them again.` };
+
+  const shooterSlot = equippedGunSlot(shooter);
+  if (!shooterSlot) return { ok: false, reason: 'You need a gun equipped to slime someone.' };
+
+  shooter.cooldowns[cooldownKey] = Date.now();
+
+  // Caught before you even get a shot off -- gun confiscated, attempt never happens.
+  if (checkIllegalGunBust(shooter, shooterSlot)) {
+    return {
+      ok: true,
+      jailed: true,
+      illegalGunBust: true,
+      message: `A cop spotted your illegally carried gun before you could even fire! Confiscated, and you're sentenced to ${JAIL_YEARS_ILLEGAL_GUN} years.`,
+      cls: 'loss',
+      shooter,
+      target,
+      duel: null,
+    };
+  }
+  consumeEquippedGun(shooter);
+
+  const targetSlot = equippedGunSlot(target);
+  let targetArmed = !!targetSlot;
+  let targetGunConfiscated = false;
+  if (targetArmed) {
+    targetGunConfiscated = checkIllegalGunBust(target, targetSlot);
+    if (targetGunConfiscated) {
+      targetArmed = false; // confiscated mid-fight -- never gets to use it in self-defense
+    } else {
+      consumeEquippedGun(target);
+    }
+  }
+  const confiscatedNote = targetGunConfiscated
+    ? ` (A cop grabbed ${target.firstName}'s illegal gun mid-fight and hauled them off too!)`
+    : '';
+
+  let loserSide;
+  let duel = null;
+
+  if (targetArmed) {
+    const shooterRoll = randInt(1, 20);
+    const targetRoll = randInt(1, 20);
+    loserSide = shooterRoll >= targetRoll ? 'target' : 'shooter';
+    duel = { shooterRoll, targetRoll };
+  } else {
+    const hit = Math.random() < slimeShootingHitChance(shooter);
+    if (!hit) {
+      return {
+        ok: true,
+        jailed: false,
+        message: `You shot at ${target.firstName} ${target.lastName} and missed! They never even noticed.${confiscatedNote}`,
+        cls: 'loss',
+        shooter,
+        target,
+        duel: null,
+      };
+    }
+    loserSide = 'target';
+  }
+
+  const loser = loserSide === 'target' ? target : shooter;
+  const winnerSide = loserSide === 'target' ? 'shooter' : 'target';
+  const winner = winnerSide === 'shooter' ? shooter : target;
+  const loserName = `${loser.firstName} ${loser.lastName}`;
+  const winnerName = `${winner.firstName} ${winner.lastName}`;
+
+  if (loser.equipment.armor) {
+    removeFromInventory(loser, loser.equipment.armor, 1);
+    loser.equipment.armor = null;
+    const years = jailForFailedSlime(winner);
+    // Message is always written from the shooter's (the API caller's) point of view -- in a duel
+    // the shooter can end up on either side of "who got jailed", so this can't just assume "you"
+    // means the winner.
+    const message = winnerSide === 'shooter'
+      ? `${duel ? `You won the shootout (${duel.shooterRoll} vs ${duel.targetRoll}), but` : `You shot at ${loserName}, but`} their body armor absorbed the shot! You're sentenced to ${years} year(s) for the attempt.${confiscatedNote}`
+      : `${loserName} shot back at you. They won the shootout (${duel.targetRoll} vs ${duel.shooterRoll}), but your body armor absorbed it! They're sentenced to ${years} year(s) for the attempt.`;
+    return {
+      ok: true,
+      jailed: winnerSide === 'shooter',
+      armorBlocked: true,
+      jailedSide: winnerSide,
+      duel,
+      message,
+      cls: winnerSide === 'shooter' ? 'loss' : 'gain',
+      shooter,
+      target,
+    };
+  }
+
+  slimeCharacter(loser, winnerName);
+  const duelNote = duel ? ` You won the shootout (${winnerSide === 'shooter' ? duel.shooterRoll : duel.targetRoll} vs ${winnerSide === 'shooter' ? duel.targetRoll : duel.shooterRoll})!` : '!';
+  return {
+    ok: true,
+    jailed: false,
+    armorBlocked: false,
+    slimedSide: loserSide,
+    duel,
+    message: winnerSide === 'shooter'
+      ? `You slimed ${loserName}${duelNote} They're locked out for 10 minutes.${confiscatedNote}`
+      : `${loserName} shot back and slimed YOU${duelNote} You're locked out for 10 minutes.`,
+    cls: winnerSide === 'shooter' ? 'gain' : 'loss',
+    shooter,
     target,
   };
 }
@@ -2517,6 +2736,9 @@ module.exports = {
   doSellDrugs,
   doRobbery,
   doRobPlayer,
+  doSlimePlayer,
+  ensureSlimeState,
+  isSlimed,
   doStartFight,
   doCombatAction,
   doFlee,

@@ -689,6 +689,39 @@ function markRobberyNotificationsSeen(userId) {
   db.prepare('UPDATE robbery_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
 }
 
+// Slime notifications: same idiom as robbery_notifications (alert modal, not a quiet bell badge).
+// `outcome` is 'slimed' (the recipient got locked out -- `until` carries the lockout end time so
+// the client can enter the SLIMED OUT gate straight from this row, no extra fetch) or 'blocked'
+// (someone tried and their own Body Armor stopped it).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS slime_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER NOT NULL,
+    shooter_name TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    until INTEGER,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const SLIME_NOTIFICATION_LIMIT = 20;
+
+function createSlimeNotification(recipientUserId, shooterName, outcome, until) {
+  db.prepare(
+    'INSERT INTO slime_notifications (recipient_user_id, shooter_name, outcome, until, created_at, seen) VALUES (?, ?, ?, ?, ?, 0)'
+  ).run(recipientUserId, shooterName, outcome, until || null, Date.now());
+}
+
+function getUnseenSlimeNotifications(userId) {
+  return db
+    .prepare('SELECT * FROM slime_notifications WHERE recipient_user_id = ? AND seen = 0 ORDER BY created_at ASC LIMIT ?')
+    .all(userId, SLIME_NOTIFICATION_LIMIT);
+}
+
+function markSlimeNotificationsSeen(userId) {
+  db.prepare('UPDATE slime_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
+}
+
 // Altcoins: a real shared table, same reasoning as mtn_listings -- an altcoin's remaining-supply
 // count has to be visible to every player, not just its creator. Holdings live in a separate table
 // (one row per user per coin) so per-user qty/cost-basis stays queryable without ever exposing it
@@ -838,6 +871,9 @@ module.exports = {
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
+  createSlimeNotification,
+  getUnseenSlimeNotifications,
+  markSlimeNotificationsSeen,
   logTransaction,
   getRecentTransactions,
   getTransactionsForUser,
