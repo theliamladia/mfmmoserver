@@ -286,7 +286,7 @@ app.post('/auth/register', (req, res) => {
   const userId = createUser(username, hashPassword(password), character);
   const token = issueToken(userId, username);
 
-  res.json({ ok: true, token, character });
+  res.json({ ok: true, token, character, serverTime: Date.now() });
 });
 
 app.post('/auth/login', (req, res) => {
@@ -299,13 +299,13 @@ app.post('/auth/login', (req, res) => {
 
   touchLastSeen(user.id);
   const token = issueToken(user.id, user.username);
-  res.json({ ok: true, token, character: JSON.parse(user.character_json) });
+  res.json({ ok: true, token, character: JSON.parse(user.character_json), serverTime: Date.now() });
 });
 
 app.get('/me', requireAuth, (req, res) => {
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
-  res.json({ ok: true, character: JSON.parse(user.character_json) });
+  res.json({ ok: true, character: JSON.parse(user.character_json), serverTime: Date.now() });
 });
 
 // The "Reset" button used to just wipe localStorage, back when that was the only save. Now the
