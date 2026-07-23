@@ -463,11 +463,28 @@ app.post('/players/rob', requireAuth, (req, res) => {
   res.json({ ok: true, jailed: result.jailed, message: result.message, cls: result.cls, character: attackerCharacter });
 });
 
+// Titles are trust-based/client-side (see gameLogic.js's comment on that exception), but the name-
+// recolor perk needs to show up for OTHER players too (MTN listings, coinflip lobbies) who only
+// ever hand the client a plain seller/creator name string -- so look up whichever title they
+// currently have equipped, live, from their own character_json.
+function getEquippedTitleId(userId) {
+  if (!userId) return null;
+  const user = getUserById(userId);
+  if (!user) return null;
+  try {
+    return JSON.parse(user.character_json).titles.equipped || null;
+  } catch {
+    return null;
+  }
+}
+
 function serializeCoinflipLobby(row) {
   return {
     id: row.id,
     creatorName: row.creator_name,
+    creatorTitleId: getEquippedTitleId(row.creator_user_id),
     joinerName: row.joiner_name,
+    joinerTitleId: getEquippedTitleId(row.joiner_user_id),
     wager: row.wager,
     creatorSide: row.creator_side,
     status: row.status,
@@ -1063,6 +1080,7 @@ function serializeListing(row) {
   return {
     id: row.id,
     sellerName: row.seller_name,
+    sellerTitleId: getEquippedTitleId(row.seller_user_id),
     itemId: row.item_id,
     qty: row.qty,
     pricePerUnit: row.price_per_unit,
