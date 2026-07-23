@@ -278,6 +278,27 @@ function getTransactionsForUser(userId, limit) {
   return db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit);
 }
 
+// Powers the admin Transaction Log dashboard -- aggregates computed directly in SQL rather than
+// paging the raw table client-side, so this stays cheap regardless of how large the log gets.
+function getTransactionSummary() {
+  const totals = db
+    .prepare('SELECT COUNT(*) AS count, COALESCE(SUM(delta), 0) AS netChange, COALESCE(SUM(ABS(delta)), 0) AS volume FROM transactions')
+    .get();
+  const byActionGains = db
+    .prepare('SELECT action, SUM(delta) AS total, COUNT(*) AS count FROM transactions WHERE delta > 0 GROUP BY action ORDER BY total DESC LIMIT 10')
+    .all();
+  const byActionSinks = db
+    .prepare('SELECT action, SUM(delta) AS total, COUNT(*) AS count FROM transactions WHERE delta < 0 GROUP BY action ORDER BY total ASC LIMIT 10')
+    .all();
+  const topEarners = db
+    .prepare('SELECT user_id AS userId, user_name AS userName, SUM(delta) AS net FROM transactions GROUP BY user_id ORDER BY net DESC LIMIT 5')
+    .all();
+  const topLosers = db
+    .prepare('SELECT user_id AS userId, user_name AS userName, SUM(delta) AS net FROM transactions GROUP BY user_id ORDER BY net ASC LIMIT 5')
+    .all();
+  return { totals, byActionGains, byActionSinks, topEarners, topLosers };
+}
+
 // Bounds disk usage on a small droplet -- called once at boot and on a daily interval (see
 // server.js), not a real OS-level cron job.
 function pruneOldTransactions(maxAgeMs) {
@@ -821,6 +842,7 @@ module.exports = {
   getRecentTransactions,
   getTransactionsForUser,
   pruneOldTransactions,
+  getTransactionSummary,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,

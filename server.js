@@ -70,6 +70,7 @@ const {
   getRecentTransactions,
   getTransactionsForUser,
   pruneOldTransactions,
+  getTransactionSummary,
   getLeaderboardState,
   updateLeaderboardState,
   getAllUsersForLeaderboard,
@@ -1558,6 +1559,10 @@ app.get('/admin/transactions', requireAuth, requireAdminPassword, (req, res) => 
   }
   const parsedBeforeId = beforeId ? Number(beforeId) : null;
   res.json({ ok: true, transactions: getRecentTransactions(TRANSACTIONS_PAGE_SIZE, parsedBeforeId).map(serializeTransaction) });
+});
+
+app.get('/admin/transactions/summary', requireAuth, requireAdminPassword, (req, res) => {
+  res.json({ ok: true, summary: getTransactionSummary() });
 });
 
 // New Milos City chat. senderName is always derived from the caller's own authoritative
