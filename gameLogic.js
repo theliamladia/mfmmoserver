@@ -464,7 +464,7 @@ function newCharacter(firstName, lastName) {
     badJobs: { currentJob: null, skills: { skill1: 0, skill2: 0, skill3: 0, skill4: 0 } },
     drugDealer: { unitsSold: 0 },
     farms: { plots: [], securityTier: 0 },
-    crypto: { rigTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() },
+    crypto: { machineTier: 0, ramTier: 0, cpuTier: 0, gpuTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() },
     crimeRecord: { streak: 0 },
     slime: { active: false, until: 0, byName: null },
     slimeRecord: [],
@@ -2504,21 +2504,42 @@ function tryInterceptFarmShipment(attacker, target) {
 // ---------- Drugs & Rugs: Floydcoin (crypto) ----------
 const FC_START_PRICE = 10000; // flavor/display only -- the fixed rate doSellFC() actually uses
 const FC_COLLECT_MIN_INTERVAL_MS = 60 * 60 * 1000; // hourly
-// Linear rig ladder -- tier 0 is the free starter rig, each further tier is a straight cash buy
-// that replaces the previous rig's rate (not additive). Maxing tier 9 unlocks Prestige, which
-// resets rigTier to 0 but permanently multiplies rate by 1.5x and upgrade costs by 2x per level.
-const CRYPTO_RIG_TIERS = [
-  { name: 'MyShitter900', rate: 0.05, cost: 0 },
-  { name: 'iFminer', rate: 0.15, cost: 5000 },
-  { name: 'iFminer360', rate: 0.30, cost: 12000 },
-  { name: 'iFminer720', rate: 0.50, cost: 25000 },
-  { name: 'iFminerX', rate: 0.80, cost: 45000 },
-  { name: 'DBL Azeroth Mining Rig', rate: 1.20, cost: 75000 },
-  { name: 'DBL Azeroth Mining Array', rate: 1.75, cost: 120000 },
-  { name: 'DBL Blackhawk Mining Array', rate: 2.50, cost: 180000 },
-  { name: 'KRG White//White Configured Mining Solution', rate: 3.50, cost: 260000 },
-  { name: 'UNT Prototype Quantum Miner', rate: 5.00, cost: 400000 },
+// 10 named machines, each mined with its own RAM/CPU/GPU upgrade tracks (3 tiers apiece). Once all
+// 3 tracks are maxed on the current machine, the player can advance to the next machine, which
+// resets RAM/CPU/GPU back to tier 0. Every machine's RAM/CPU/GPU costs and addRates are 1.5x the
+// previous machine's (MACHINE_SCALING), so upgrades matter as much on the top end as the bottom.
+// Maxing every track on the last machine (index 9) unlocks Prestige: resets back to machine 0,
+// but permanently multiplies rate by 1.5x and cost by 2x per prestige level, stacking on repeats.
+const CRYPTO_MACHINES = [
+  { name: 'MyShitter900', baseRate: 0.05 },
+  { name: 'iFminer', baseRate: 0.15 },
+  { name: 'iFminer360', baseRate: 0.30 },
+  { name: 'iFminer720', baseRate: 0.50 },
+  { name: 'iFminerX', baseRate: 0.80 },
+  { name: 'DBL Azeroth Mining Rig', baseRate: 1.20 },
+  { name: 'DBL Azeroth Mining Array', baseRate: 1.75 },
+  { name: 'DBL Blackhawk Mining Array', baseRate: 2.50 },
+  { name: 'KRG White//White Configured Mining Solution', baseRate: 3.50 },
+  { name: 'UNT Prototype Quantum Miner', baseRate: 5.00 },
 ];
+const MACHINE_UPGRADE_SCALING = 1.5;
+const CRYPTO_UPGRADE_TIERS = {
+  ram: [
+    { addRate: 0.02, cost: 2000 },
+    { addRate: 0.05, cost: 5000 },
+    { addRate: 0.10, cost: 10000 },
+  ],
+  cpu: [
+    { addRate: 0.05, cost: 5000 },
+    { addRate: 0.12, cost: 12000 },
+    { addRate: 0.25, cost: 25000 },
+  ],
+  gpu: [
+    { addRate: 0.10, cost: 10000 },
+    { addRate: 0.25, cost: 25000 },
+    { addRate: 0.50, cost: 50000 },
+  ],
+};
 
 // Cold Storage: an offline FC vault sitting alongside the hot wallet (crypto.fc) -- capacity-
 // capped, upgradeable with cash, and immune to tryDrainCryptoWallet below since that function only
@@ -2532,9 +2553,12 @@ const COLD_STORAGE_UPGRADE_TIERS = [
 
 function ensureCryptoState(character) {
   if (!character.crypto) {
-    character.crypto = { rigTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() };
+    character.crypto = { machineTier: 0, ramTier: 0, cpuTier: 0, gpuTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() };
   }
-  if (character.crypto.rigTier === undefined) character.crypto.rigTier = 0;
+  if (character.crypto.machineTier === undefined) character.crypto.machineTier = 0;
+  if (character.crypto.ramTier === undefined) character.crypto.ramTier = 0;
+  if (character.crypto.cpuTier === undefined) character.crypto.cpuTier = 0;
+  if (character.crypto.gpuTier === undefined) character.crypto.gpuTier = 0;
   if (character.crypto.prestigeLevel === undefined) character.crypto.prestigeLevel = 0;
   if (!character.crypto.coldStorage) {
     character.crypto.coldStorage = { fc: 0, tier: 0 };
@@ -2591,36 +2615,73 @@ function cryptoPrestigeCostMultiplier(prestigeLevel) {
   return Math.pow(2, prestigeLevel);
 }
 
+function cryptoMachineScaling(machineTier) {
+  return Math.pow(MACHINE_UPGRADE_SCALING, machineTier);
+}
+
+function cryptoTrackAddRate(crypto, track) {
+  const tier = crypto[`${track}Tier`];
+  const scale = cryptoMachineScaling(crypto.machineTier);
+  return CRYPTO_UPGRADE_TIERS[track].slice(0, tier).reduce((sum, t) => sum + t.addRate * scale, 0);
+}
+
+function cryptoNextTrackCost(crypto, track) {
+  const tiers = CRYPTO_UPGRADE_TIERS[track];
+  const tier = crypto[`${track}Tier`];
+  if (tier >= tiers.length) return null;
+  const next = tiers[tier];
+  return Math.round(next.cost * cryptoMachineScaling(crypto.machineTier) * cryptoPrestigeCostMultiplier(crypto.prestigeLevel));
+}
+
+function cryptoTracksMaxed(crypto) {
+  return ['ram', 'cpu', 'gpu'].every((track) => crypto[`${track}Tier`] >= CRYPTO_UPGRADE_TIERS[track].length);
+}
+
 function cryptoDailyRate(crypto) {
-  return CRYPTO_RIG_TIERS[crypto.rigTier].rate * cryptoPrestigeRateMultiplier(crypto.prestigeLevel);
+  const machine = CRYPTO_MACHINES[crypto.machineTier];
+  const machineRate = machine.baseRate * cryptoMachineScaling(crypto.machineTier);
+  const upgradeRate = cryptoTrackAddRate(crypto, 'ram') + cryptoTrackAddRate(crypto, 'cpu') + cryptoTrackAddRate(crypto, 'gpu');
+  return (machineRate + upgradeRate) * cryptoPrestigeRateMultiplier(crypto.prestigeLevel);
 }
 
-function cryptoNextRigCost(crypto) {
-  if (crypto.rigTier >= CRYPTO_RIG_TIERS.length - 1) return null;
-  const next = CRYPTO_RIG_TIERS[crypto.rigTier + 1];
-  return Math.round(next.cost * cryptoPrestigeCostMultiplier(crypto.prestigeLevel));
-}
-
-function doBuyCryptoRigUpgrade(character) {
+function doBuyCryptoUpgrade(character, track) {
+  const tiers = CRYPTO_UPGRADE_TIERS[track];
+  if (!tiers) return { ok: false, reason: 'Unknown upgrade track.' };
   const crypto = ensureCryptoState(character);
-  if (crypto.rigTier >= CRYPTO_RIG_TIERS.length - 1) {
-    return { ok: false, reason: 'Already maxed out -- Prestige to reset and mine even faster.' };
-  }
-  const next = CRYPTO_RIG_TIERS[crypto.rigTier + 1];
-  const cost = cryptoNextRigCost(crypto);
+  const tierKey = `${track}Tier`;
+  if (crypto[tierKey] >= tiers.length) return { ok: false, reason: 'Already maxed out on this machine.' };
+  const cost = cryptoNextTrackCost(crypto, track);
   if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash = round2(character.cash - cost);
-  crypto.rigTier += 1;
-  return { ok: true, message: `Upgraded to ${next.name}.`, cls: 'gain', character };
+  crypto[tierKey] += 1;
+  return { ok: true, message: `${track.toUpperCase()} upgraded to tier ${crypto[tierKey]}.`, cls: 'gain', character };
+}
+
+function doAdvanceCryptoMachine(character) {
+  const crypto = ensureCryptoState(character);
+  if (!cryptoTracksMaxed(crypto)) {
+    return { ok: false, reason: 'Max out RAM, CPU, and GPU on your current machine first.' };
+  }
+  if (crypto.machineTier >= CRYPTO_MACHINES.length - 1) {
+    return { ok: false, reason: 'Already on the last machine -- Prestige to reset and mine even faster.' };
+  }
+  crypto.machineTier += 1;
+  crypto.ramTier = 0;
+  crypto.cpuTier = 0;
+  crypto.gpuTier = 0;
+  return { ok: true, message: `Upgraded to ${CRYPTO_MACHINES[crypto.machineTier].name}.`, cls: 'gain', character };
 }
 
 function doPrestigeCryptoRig(character) {
   const crypto = ensureCryptoState(character);
-  if (crypto.rigTier < CRYPTO_RIG_TIERS.length - 1) {
-    return { ok: false, reason: 'Max out your current rig before you can Prestige.' };
+  if (crypto.machineTier < CRYPTO_MACHINES.length - 1 || !cryptoTracksMaxed(crypto)) {
+    return { ok: false, reason: 'Max out RAM, CPU, and GPU on your last machine before you can Prestige.' };
   }
   crypto.prestigeLevel += 1;
-  crypto.rigTier = 0;
+  crypto.machineTier = 0;
+  crypto.ramTier = 0;
+  crypto.cpuTier = 0;
+  crypto.gpuTier = 0;
   return {
     ok: true,
     message: `Prestiged to level ${crypto.prestigeLevel} -- mining rate up 50%, upgrade costs up 100%.`,
@@ -3119,9 +3180,11 @@ module.exports = {
   FARM_SECURITY_MAX_TIER,
   farmConfiscationChance,
   ensureCryptoState,
-  doBuyCryptoRigUpgrade,
+  doBuyCryptoUpgrade,
+  doAdvanceCryptoMachine,
   doPrestigeCryptoRig,
-  cryptoNextRigCost,
+  cryptoNextTrackCost,
+  cryptoTracksMaxed,
   doCollectCrypto,
   doSellFC,
   doBuyFC,
@@ -3134,7 +3197,9 @@ module.exports = {
   cryptoDailyRate,
   cryptoPrestigeRateMultiplier,
   cryptoPrestigeCostMultiplier,
-  CRYPTO_RIG_TIERS,
+  cryptoMachineScaling,
+  CRYPTO_MACHINES,
+  CRYPTO_UPGRADE_TIERS,
   FC_START_PRICE,
   ALTCOIN_MINT_COST_FC,
   ALTCOIN_SUPPLY,
