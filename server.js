@@ -203,6 +203,7 @@ const {
   generateInvestorBotPost,
   randInt,
   STOCK_SPREAD,
+  BANK_TIERS,
 } = require('./gameLogic');
 
 const app = express();
@@ -1715,6 +1716,45 @@ app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {
     inventory: character.inventory,
     equipment: character.equipment,
   });
+});
+
+// Every player's Bank/Cold Storage balances in one list -- read-only, admin-only. Reuses
+// getAllUsersForLeaderboard (already just {id, username, character_json} for every user) rather
+// than adding a new bespoke query, same as /admin/reset-all-stats above.
+app.get('/admin/bank-balances', requireAuth, requireAdminPassword, (req, res) => {
+  const rows = getAllUsersForLeaderboard().map((row) => {
+    const character = JSON.parse(row.character_json);
+    const bank = character.bank || { tier: 0, balance: 0, hasCreditCard: false, creditBalance: 0 };
+    const tierDef = BANK_TIERS[bank.tier];
+    return {
+      username: row.username,
+      name: `${character.firstName} ${character.lastName}`,
+      tier: bank.tier,
+      tierName: tierDef ? tierDef.name : 'Unknown',
+      balance: bank.balance,
+      hasCreditCard: !!bank.hasCreditCard,
+      creditBalance: bank.creditBalance || 0,
+      pocketCash: character.cash || 0,
+    };
+  }).sort((a, b) => b.balance - a.balance);
+  res.json({ ok: true, balances: rows });
+});
+
+app.get('/admin/crypto-balances', requireAuth, requireAdminPassword, (req, res) => {
+  const rows = getAllUsersForLeaderboard().map((row) => {
+    const character = JSON.parse(row.character_json);
+    const crypto = character.crypto || { fc: 0 };
+    const coldStorage = crypto.coldStorage || { fc: 0, tier: 0 };
+    return {
+      username: row.username,
+      name: `${character.firstName} ${character.lastName}`,
+      hotWalletFc: crypto.fc || 0,
+      coldStorageFc: coldStorage.fc || 0,
+      coldStorageTier: coldStorage.tier || 0,
+      totalFc: round4((crypto.fc || 0) + (coldStorage.fc || 0)),
+    };
+  }).sort((a, b) => b.totalFc - a.totalFc);
+  res.json({ ok: true, balances: rows });
 });
 
 function serializeTransaction(row) {

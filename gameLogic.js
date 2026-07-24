@@ -3191,4 +3191,5 @@ module.exports = {
   randInt,
   randFloat,
   STOCK_SPREAD,
+  BANK_TIERS,
 };
