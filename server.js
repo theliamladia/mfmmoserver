@@ -182,7 +182,8 @@ const {
   doBuyFarmSecurity,
   advanceFarmPlot,
   ensureCryptoState,
-  doBuyCryptoUpgrade,
+  doBuyCryptoRigUpgrade,
+  doPrestigeCryptoRig,
   doCollectCrypto,
   doSellFC,
   doBuyFC,
@@ -1096,10 +1097,8 @@ app.get('/crypto/state', requireAuth, (req, res) => {
   const character = JSON.parse(user.character_json);
   res.json({ ok: true, crypto: ensureCryptoState(character) });
 });
-app.post('/crypto/upgrade', requireAuth, (req, res) => {
-  const { track } = req.body || {};
-  runAction(req, res, doBuyCryptoUpgrade, track);
-});
+app.post('/crypto/upgrade', requireAuth, (req, res) => runAction(req, res, doBuyCryptoRigUpgrade));
+app.post('/crypto/prestige', requireAuth, (req, res) => runAction(req, res, doPrestigeCryptoRig));
 app.post('/crypto/collect', requireAuth, (req, res) => runAction(req, res, doCollectCrypto));
 app.post('/crypto/sell', requireAuth, (req, res) => {
   const { amount } = req.body || {};

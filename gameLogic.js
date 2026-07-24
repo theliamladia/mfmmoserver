@@ -464,7 +464,7 @@ function newCharacter(firstName, lastName) {
     badJobs: { currentJob: null, skills: { skill1: 0, skill2: 0, skill3: 0, skill4: 0 } },
     drugDealer: { unitsSold: 0 },
     farms: { plots: [], securityTier: 0 },
-    crypto: { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() },
+    crypto: { rigTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() },
     crimeRecord: { streak: 0 },
     slime: { active: false, until: 0, byName: null },
     slimeRecord: [],
@@ -2503,27 +2503,22 @@ function tryInterceptFarmShipment(attacker, target) {
 
 // ---------- Drugs & Rugs: Floydcoin (crypto) ----------
 const FC_START_PRICE = 10000; // flavor/display only -- the fixed rate doSellFC() actually uses
-const FC_BASE_RATE_PER_DAY = 0.05; // free idle rig ("MyShitter900"), always active, no purchase needed
 const FC_COLLECT_MIN_INTERVAL_MS = 60 * 60 * 1000; // hourly
-// Each tier's cost is back-solved so it pays for itself in ~10 collections at its own new rate:
-// cost = addRate * 10(collections) * FC_START_PRICE.
-const CRYPTO_UPGRADE_TIERS = {
-  ram: [
-    { addRate: 0.02, cost: 2000 },
-    { addRate: 0.05, cost: 5000 },
-    { addRate: 0.10, cost: 10000 },
-  ],
-  cpu: [
-    { addRate: 0.05, cost: 5000 },
-    { addRate: 0.12, cost: 12000 },
-    { addRate: 0.25, cost: 25000 },
-  ],
-  gpu: [
-    { addRate: 0.10, cost: 10000 },
-    { addRate: 0.25, cost: 25000 },
-    { addRate: 0.50, cost: 50000 },
-  ],
-};
+// Linear rig ladder -- tier 0 is the free starter rig, each further tier is a straight cash buy
+// that replaces the previous rig's rate (not additive). Maxing tier 9 unlocks Prestige, which
+// resets rigTier to 0 but permanently multiplies rate by 1.5x and upgrade costs by 2x per level.
+const CRYPTO_RIG_TIERS = [
+  { name: 'MyShitter900', rate: 0.05, cost: 0 },
+  { name: 'iFminer', rate: 0.15, cost: 5000 },
+  { name: 'iFminer360', rate: 0.30, cost: 12000 },
+  { name: 'iFminer720', rate: 0.50, cost: 25000 },
+  { name: 'iFminerX', rate: 0.80, cost: 45000 },
+  { name: 'DBL Azeroth Mining Rig', rate: 1.20, cost: 75000 },
+  { name: 'DBL Azeroth Mining Array', rate: 1.75, cost: 120000 },
+  { name: 'DBL Blackhawk Mining Array', rate: 2.50, cost: 180000 },
+  { name: 'KRG White//White Configured Mining Solution', rate: 3.50, cost: 260000 },
+  { name: 'UNT Prototype Quantum Miner', rate: 5.00, cost: 400000 },
+];
 
 // Cold Storage: an offline FC vault sitting alongside the hot wallet (crypto.fc) -- capacity-
 // capped, upgradeable with cash, and immune to tryDrainCryptoWallet below since that function only
@@ -2537,8 +2532,10 @@ const COLD_STORAGE_UPGRADE_TIERS = [
 
 function ensureCryptoState(character) {
   if (!character.crypto) {
-    character.crypto = { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() };
+    character.crypto = { rigTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() };
   }
+  if (character.crypto.rigTier === undefined) character.crypto.rigTier = 0;
+  if (character.crypto.prestigeLevel === undefined) character.crypto.prestigeLevel = 0;
   if (!character.crypto.coldStorage) {
     character.crypto.coldStorage = { fc: 0, tier: 0 };
   }
@@ -2586,24 +2583,47 @@ function doBuyColdStorageUpgrade(character) {
   };
 }
 
-function cryptoDailyRate(crypto) {
-  const rate = (track, tier) => CRYPTO_UPGRADE_TIERS[track].slice(0, tier).reduce((sum, t) => sum + t.addRate, 0);
-  return FC_BASE_RATE_PER_DAY + rate('ram', crypto.ramTier) + rate('cpu', crypto.cpuTier) + rate('gpu', crypto.gpuTier);
+function cryptoPrestigeRateMultiplier(prestigeLevel) {
+  return Math.pow(1.5, prestigeLevel);
 }
 
-function doBuyCryptoUpgrade(character, track) {
-  const tiers = CRYPTO_UPGRADE_TIERS[track];
-  if (!tiers) return { ok: false, reason: 'Unknown upgrade track.' };
+function cryptoPrestigeCostMultiplier(prestigeLevel) {
+  return Math.pow(2, prestigeLevel);
+}
+
+function cryptoDailyRate(crypto) {
+  return CRYPTO_RIG_TIERS[crypto.rigTier].rate * cryptoPrestigeRateMultiplier(crypto.prestigeLevel);
+}
+
+function cryptoNextRigCost(crypto) {
+  if (crypto.rigTier >= CRYPTO_RIG_TIERS.length - 1) return null;
+  const next = CRYPTO_RIG_TIERS[crypto.rigTier + 1];
+  return Math.round(next.cost * cryptoPrestigeCostMultiplier(crypto.prestigeLevel));
+}
+
+function doBuyCryptoRigUpgrade(character) {
   const crypto = ensureCryptoState(character);
-  const tierKey = `${track}Tier`;
-  if (crypto[tierKey] >= tiers.length) return { ok: false, reason: 'Already maxed out.' };
-  const next = tiers[crypto[tierKey]];
-  if (character.cash < next.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
-  character.cash = round2(character.cash - next.cost);
-  crypto[tierKey] += 1;
+  if (crypto.rigTier >= CRYPTO_RIG_TIERS.length - 1) {
+    return { ok: false, reason: 'Already maxed out -- Prestige to reset and mine even faster.' };
+  }
+  const next = CRYPTO_RIG_TIERS[crypto.rigTier + 1];
+  const cost = cryptoNextRigCost(crypto);
+  if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - cost);
+  crypto.rigTier += 1;
+  return { ok: true, message: `Upgraded to ${next.name}.`, cls: 'gain', character };
+}
+
+function doPrestigeCryptoRig(character) {
+  const crypto = ensureCryptoState(character);
+  if (crypto.rigTier < CRYPTO_RIG_TIERS.length - 1) {
+    return { ok: false, reason: 'Max out your current rig before you can Prestige.' };
+  }
+  crypto.prestigeLevel += 1;
+  crypto.rigTier = 0;
   return {
     ok: true,
-    message: `${track.toUpperCase()} upgraded to tier ${crypto[tierKey]} (+${next.addRate} FC/day).`,
+    message: `Prestiged to level ${crypto.prestigeLevel} -- mining rate up 50%, upgrade costs up 100%.`,
     cls: 'gain',
     character,
   };
@@ -3099,7 +3119,9 @@ module.exports = {
   FARM_SECURITY_MAX_TIER,
   farmConfiscationChance,
   ensureCryptoState,
-  doBuyCryptoUpgrade,
+  doBuyCryptoRigUpgrade,
+  doPrestigeCryptoRig,
+  cryptoNextRigCost,
   doCollectCrypto,
   doSellFC,
   doBuyFC,
@@ -3110,9 +3132,10 @@ module.exports = {
   doWithdrawColdStorage,
   doBuyColdStorageUpgrade,
   cryptoDailyRate,
-  CRYPTO_UPGRADE_TIERS,
+  cryptoPrestigeRateMultiplier,
+  cryptoPrestigeCostMultiplier,
+  CRYPTO_RIG_TIERS,
   FC_START_PRICE,
-  FC_BASE_RATE_PER_DAY,
   ALTCOIN_MINT_COST_FC,
   ALTCOIN_SUPPLY,
   ALTCOIN_START_PRICE,
