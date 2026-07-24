@@ -837,27 +837,7 @@ function resolveBlackjack(character) {
   return { ok: true, message: `${msg} (bet ${bj.bet}, payout ${payout})`, cls, resolved: true, character };
 }
 
-// Multiplayer table blackjack reuses drawCard/handTotal/isBlackjack (already module-scope, not
-// character-specific) plus this standalone payout function -- unlike the single-player
-// resolveBlackjack, a bust has to be handled as a branch here instead of being intercepted at hit
-// time, since a table round's payout only happens once, together, after every seat is done.
-function computeTableBlackjackPayout(playerCards, dealerCards, bet) {
-  const playerTotal = handTotal(playerCards);
-  const dealerTotal = handTotal(dealerCards);
-  const playerBJ = isBlackjack(playerCards);
-  const dealerBJ = isBlackjack(dealerCards);
-
-  if (playerTotal > 21) return { payout: 0, message: `Busted with ${playerTotal}. You lose.` };
-  if (playerBJ && dealerBJ) return { payout: bet, message: 'Both blackjack! Push.' };
-  if (playerBJ) return { payout: Math.floor(bet * 2.5), message: 'Blackjack! You win 3:2.' };
-  if (dealerBJ) return { payout: 0, message: 'Dealer blackjack. You lose.' };
-  if (dealerTotal > 21) return { payout: bet * 2, message: `Dealer busts with ${dealerTotal}. You win!` };
-  if (playerTotal > dealerTotal) return { payout: bet * 2, message: `You win ${playerTotal} vs ${dealerTotal}.` };
-  if (playerTotal === dealerTotal) return { payout: bet, message: `Push at ${playerTotal}.` };
-  return { payout: 0, message: `Dealer wins ${dealerTotal} vs ${playerTotal}.` };
-}
-
-// ---------- Roulette (multiplayer tables only -- no single-player version existed before) ----------
+// ---------- Roulette ----------
 const ROULETTE_COLOR_BY_NUMBER = (() => {
   const red = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
   const map = {};
@@ -871,13 +851,15 @@ function spinRoulette() {
   return randInt(0, 36);
 }
 
-// bet: { type: 'straight'|'redblack'|'evenodd'|'highlow', value: number|string, amount }
+// bet: { type: 'straight'|'redblack'|'evenodd'|'highlow'|'dozen'|'column', value: number|string, amount }
+// Payouts are the total returned (stake + profit), same convention as doSlotSpin/doBjDeal's payout
+// values -- e.g. a straight-up win returns 36x the bet (35:1 profit plus the original bet back).
 function evaluateRouletteBet(bet, resultNumber) {
   const color = ROULETTE_COLOR_BY_NUMBER[resultNumber];
   if (bet.type === 'straight') {
     return Number(bet.value) === resultNumber ? bet.amount * 36 : 0;
   }
-  if (resultNumber === 0) return 0; // house number -- all even-money outside bets lose
+  if (resultNumber === 0) return 0; // house number -- all even-money and dozen/column bets lose
   if (bet.type === 'redblack') {
     return bet.value === color ? bet.amount * 2 : 0;
   }
@@ -889,7 +871,37 @@ function evaluateRouletteBet(bet, resultNumber) {
     const isHigh = resultNumber >= 19;
     return (bet.value === 'high') === isHigh ? bet.amount * 2 : 0;
   }
+  if (bet.type === 'dozen') {
+    const inDozen = Math.ceil(resultNumber / 12) === Number(bet.value);
+    return inDozen ? bet.amount * 3 : 0;
+  }
+  if (bet.type === 'column') {
+    const inColumn = (resultNumber - Number(bet.value)) % 3 === 0;
+    return inColumn ? bet.amount * 3 : 0;
+  }
   return 0;
+}
+
+// Single-player Roulette: place any number of bets in one go, spin once, resolve every bet against
+// the same result. No cooldown, same shape as doSlotSpin -- gated only by chip balance.
+function doRouletteSpin(character, bets) {
+  if (!Array.isArray(bets) || !bets.length) return { ok: false, reason: 'Place at least one bet.' };
+
+  const total = bets.reduce((sum, b) => sum + (Number(b.amount) > 0 ? Number(b.amount) : 0), 0);
+  if (!total || total < 1) return { ok: false, reason: 'Enter a valid bet.' };
+  if (total > character.chips) return { ok: false, reason: 'Not enough Chips.' };
+
+  character.chips -= total;
+  const resultNumber = spinRoulette();
+  const color = ROULETTE_COLOR_BY_NUMBER[resultNumber];
+  const payout = bets.reduce((sum, b) => sum + evaluateRouletteBet(b, resultNumber), 0);
+  character.chips = round2(character.chips + payout);
+
+  const net = payout - total;
+  const message = payout > 0
+    ? `Ball lands on ${resultNumber} (${color}). Won ${payout} chips${net > 0 ? ` (net +${net})` : net < 0 ? ` (net ${net})` : ''}.`
+    : `Ball lands on ${resultNumber} (${color}). No winning bets -- lost ${total} chips.`;
+  return { ok: true, character, resultNumber, color, totalBet: total, payout, message, cls: payout > total ? 'gain' : payout === total ? '' : 'loss' };
 }
 
 // Mirrors the client's doBjDeal() exactly, including the natural-blackjack auto-resolve.
@@ -2676,10 +2688,10 @@ module.exports = {
   drawCard,
   handTotal,
   isBlackjack,
-  computeTableBlackjackPayout,
   spinRoulette,
   evaluateRouletteBet,
   ROULETTE_COLOR_BY_NUMBER,
+  doRouletteSpin,
   doBankDeposit,
   doBankWithdraw,
   doBankUpgrade,
