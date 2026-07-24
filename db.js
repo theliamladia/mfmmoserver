@@ -220,6 +220,96 @@ function getRecentChatMessages() {
   return rows.reverse();
 }
 
+// Stock Market: one shared row per ticker (not per-character) -- price/fairValue/lastTickAt are
+// server-authoritative and identical for every player, ticked forward lazily on read (see
+// advanceStockTicks in gameLogic.js).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stocks (
+    symbol TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    price REAL NOT NULL,
+    fair_value REAL NOT NULL,
+    last_tick_at INTEGER NOT NULL
+  );
+`);
+
+// Seeds the ticker roster on first boot only -- never overwrites existing rows, so restarts don't
+// reset anyone's market back to launch prices.
+function seedStocksIfEmpty(definitions) {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM stocks').get().n;
+  if (count > 0) return;
+  const insert = db.prepare(
+    'INSERT INTO stocks (symbol, name, sector, tier, price, fair_value, last_tick_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const now = Date.now();
+  definitions.forEach((d) => insert.run(d.symbol, d.name, d.sector, d.tier, d.startPrice, d.startPrice, now));
+}
+
+function getAllStocks() {
+  return db.prepare('SELECT * FROM stocks').all();
+}
+
+function updateStockPrice(symbol, price, fairValue, lastTickAt) {
+  db.prepare('UPDATE stocks SET price = ?, fair_value = ?, last_tick_at = ? WHERE symbol = ?')
+    .run(price, fairValue, lastTickAt, symbol);
+}
+
+// Investors Chat: a separate room from the New Milos City chat (chat_messages above) -- never
+// mixed together, its own table/routes/UI. user_id is nullable since NPC bot posts have no real
+// account behind them.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS investor_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    sender_name TEXT NOT NULL,
+    title_text TEXT,
+    title_id TEXT,
+    message TEXT NOT NULL,
+    is_bot INTEGER NOT NULL DEFAULT 0,
+    sent_at INTEGER NOT NULL
+  );
+`);
+const INVESTOR_CHAT_HISTORY_LIMIT = 50;
+
+function createInvestorChatMessage(userId, senderName, titleText, message, titleId, isBot) {
+  const stmt = db.prepare(
+    'INSERT INTO investor_chat_messages (user_id, sender_name, title_text, title_id, message, is_bot, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const info = stmt.run(userId || null, senderName, titleText || null, titleId || null, message, isBot ? 1 : 0, Date.now());
+  return info.lastInsertRowid;
+}
+
+function getRecentInvestorChatMessages() {
+  const rows = db.prepare('SELECT * FROM investor_chat_messages ORDER BY sent_at DESC LIMIT ?').all(INVESTOR_CHAT_HISTORY_LIMIT);
+  return rows.reverse();
+}
+
+// Single shared row tracking when the next random NPC investor-chat post is due. Unlike stock
+// ticks, bot-post cadence doesn't need to replay history perfectly on catch-up -- it just resumes
+// from "now" (see maybeSpawnInvestorBotPost in server.js), so a plain next-timestamp is enough.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_market_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    next_bot_post_at INTEGER NOT NULL
+  );
+`);
+
+function getStockMarketState() {
+  let row = db.prepare('SELECT * FROM stock_market_state WHERE id = 1').get();
+  if (!row) {
+    const nextAt = Date.now() + 30 * 1000;
+    db.prepare('INSERT INTO stock_market_state (id, next_bot_post_at) VALUES (1, ?)').run(nextAt);
+    row = { id: 1, next_bot_post_at: nextAt };
+  }
+  return row;
+}
+
+function setNextBotPostAt(ts) {
+  db.prepare('UPDATE stock_market_state SET next_bot_post_at = ? WHERE id = 1').run(ts);
+}
+
 function createUser(username, passwordHash, character) {
   const stmt = db.prepare(
     'INSERT INTO users (username, password_hash, character_json, created_at, last_seen) VALUES (?, ?, ?, ?, ?)'
@@ -724,6 +814,13 @@ module.exports = {
   setServerMaintenance,
   createChatMessage,
   getRecentChatMessages,
+  seedStocksIfEmpty,
+  getAllStocks,
+  updateStockPrice,
+  createInvestorChatMessage,
+  getRecentInvestorChatMessages,
+  getStockMarketState,
+  setNextBotPostAt,
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,

@@ -30,6 +30,13 @@ const {
   setServerMaintenance,
   createChatMessage,
   getRecentChatMessages,
+  seedStocksIfEmpty,
+  getAllStocks,
+  updateStockPrice,
+  createInvestorChatMessage,
+  getRecentInvestorChatMessages,
+  getStockMarketState,
+  setNextBotPostAt,
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,
@@ -176,10 +183,20 @@ const {
   doBuyAltcoinCoins,
   altcoinDumpPayout,
   altcoinFullBuyoutPayout,
+  STOCK_DEFINITIONS,
+  advanceStockTicks,
+  applyStockNewsShock,
+  doBuyStock,
+  doSellStock,
+  generateInvestorBotPost,
+  randInt,
 } = require('./gameLogic');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// One-time seed: creates the ticker roster on first boot only, never touches existing rows.
+seedStocksIfEmpty(STOCK_DEFINITIONS);
 
 // A player counts as "online" if any authenticated request touched last_seen within this window.
 // requireAuth updates last_seen on every call, and the client polls /players/online well inside
@@ -1686,6 +1703,120 @@ app.post('/chat/send', requireAuth, (req, res) => {
 
   createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN), safeTitleId);
   res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
+});
+
+// ---------- Stock Market ----------
+// Reads every ticker's DB row and ticks each one forward by however many 32s intervals have
+// elapsed since it was last touched, persisting only the ones that actually moved. Called at the
+// top of every stock/investor-chat route so price is always current before anything reads it.
+function ensureStocksTicked() {
+  const now = Date.now();
+  return getAllStocks().map((row) => {
+    const stock = {
+      symbol: row.symbol,
+      name: row.name,
+      sector: row.sector,
+      tier: row.tier,
+      price: row.price,
+      fairValue: row.fair_value,
+      lastTickAt: row.last_tick_at,
+    };
+    if (advanceStockTicks(stock, now)) {
+      updateStockPrice(stock.symbol, stock.price, stock.fairValue, stock.lastTickAt);
+    }
+    return stock;
+  });
+}
+
+function serializeStock(s) {
+  return { symbol: s.symbol, name: s.name, sector: s.sector, tier: s.tier, price: s.price };
+}
+
+const BOT_POST_MIN_GAP_MS = 45 * 1000;
+const BOT_POST_MAX_GAP_MS = 90 * 1000;
+
+// Fires at most one NPC Investors Chat post per call, only once the shared cadence timer says
+// it's due -- unlike price ticks, a bot post doesn't need to replay history on catch-up, it just
+// resumes from "now". A "real" post also jolts the price it references.
+function maybeSpawnInvestorBotPost(stocks) {
+  const state = getStockMarketState();
+  const now = Date.now();
+  if (now < state.next_bot_post_at) return;
+
+  const post = generateInvestorBotPost(stocks);
+  createInvestorChatMessage(null, post.senderName, null, post.message, null, true);
+
+  if (post.isReal && post.stockSymbol) {
+    const stock = stocks.find((s) => s.symbol === post.stockSymbol);
+    if (stock) {
+      applyStockNewsShock(stock, post.bullish);
+      updateStockPrice(stock.symbol, stock.price, stock.fairValue, stock.lastTickAt);
+    }
+  }
+
+  setNextBotPostAt(now + randInt(BOT_POST_MIN_GAP_MS, BOT_POST_MAX_GAP_MS));
+}
+
+app.get('/stocks', requireAuth, (req, res) => {
+  const stocks = ensureStocksTicked();
+  maybeSpawnInvestorBotPost(stocks);
+  res.json({ ok: true, stocks: stocks.map(serializeStock) });
+});
+
+app.post('/stocks/buy', requireAuth, (req, res) => {
+  const { symbol, qty } = req.body || {};
+  const stocks = ensureStocksTicked();
+  const stock = stocks.find((s) => s.symbol === symbol);
+  if (!stock) return res.status(404).json({ ok: false, reason: 'Unknown stock.' });
+  runAction(req, res, doBuyStock, stock, qty);
+});
+
+app.post('/stocks/sell', requireAuth, (req, res) => {
+  const { symbol, qty } = req.body || {};
+  const stocks = ensureStocksTicked();
+  const stock = stocks.find((s) => s.symbol === symbol);
+  if (!stock) return res.status(404).json({ ok: false, reason: 'Unknown stock.' });
+  runAction(req, res, doSellStock, stock, qty);
+});
+
+// ---------- Investors Chat ----------
+// A separate chat room from New Milos City's (chat_messages/createChatMessage above) -- its own
+// table, its own routes, never merged with the main chat. Real player posts sit alongside NPC bot
+// posts (see maybeSpawnInvestorBotPost) in the same feed.
+const INVESTOR_CHAT_MESSAGE_MAX_LEN = 500;
+
+function serializeInvestorChatMessage(row) {
+  return {
+    id: row.id,
+    senderName: row.sender_name,
+    titleText: row.title_text,
+    titleId: row.title_id,
+    message: row.message,
+    isBot: !!row.is_bot,
+    sentAt: row.sent_at,
+  };
+}
+
+app.get('/investors/chat/messages', requireAuth, (req, res) => {
+  const stocks = ensureStocksTicked();
+  maybeSpawnInvestorBotPost(stocks);
+  res.json({ ok: true, messages: getRecentInvestorChatMessages().map(serializeInvestorChatMessage) });
+});
+
+app.post('/investors/chat/send', requireAuth, (req, res) => {
+  const { titleText, message, titleId } = req.body || {};
+  const trimmed = (message || '').trim();
+  if (!trimmed) return res.status(400).json({ ok: false, reason: 'Enter a message.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const senderName = `${character.firstName} ${character.lastName}`;
+  const safeTitleText = (titleText || 'CIVILIAN').slice(0, CHAT_TITLE_MAX_LEN);
+  const safeTitleId = typeof titleId === 'string' ? titleId.slice(0, CHAT_TITLE_MAX_LEN) : null;
+
+  createInvestorChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, INVESTOR_CHAT_MESSAGE_MAX_LEN), safeTitleId, false);
+  res.json({ ok: true, messages: getRecentInvestorChatMessages().map(serializeInvestorChatMessage) });
 });
 
 // ---------- Roulette ----------

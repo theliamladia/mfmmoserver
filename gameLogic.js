@@ -2774,6 +2774,198 @@ function buildLeaderboardBoard(users, limit = 10) {
   return board;
 }
 
+// ---------- Stock Market ----------
+// Price/fairValue live in a shared DB row per ticker (not per-character) -- server.js ticks them
+// forward lazily on read (see advanceStockTicks), same "catch up since last visit" trick as
+// advanceFarmPlot/ensureCryptoState, so every player sees the exact same price at any instant with
+// no cron process required.
+const STOCK_TIER_CONFIG = {
+  // pull: fraction of the gap to fairValue closed per tick (mean reversion "leash" strength).
+  // vol: max +/- fractional jitter applied per tick.
+  megabluechip: { pull: 0.08, vol: 0.0015 },
+  bluechip: { pull: 0.05, vol: 0.004 },
+  growth: { pull: 0.02, vol: 0.012 },
+  volatile: { pull: 0.008, vol: 0.025 },
+  meme: { pull: 0.003, vol: 0.045 },
+};
+
+const STOCK_DEFINITIONS = [
+  { symbol: 'DBLK', name: 'D Block Industries', sector: 'Technology (New Milos City)', tier: 'growth', startPrice: 64 },
+  { symbol: 'COPP', name: 'Consolidated Objective Permanence Projects', sector: 'Biopharma (New Milos City)', tier: 'volatile', startPrice: 18 },
+  { symbol: '3OAK', name: '3 Oaks Parametrics', sector: 'Military (New Milos City)', tier: 'bluechip', startPrice: 210 },
+  { symbol: 'AJD', name: '&Drujian Pharmaceuticalls', sector: 'Pharmaceuticals (China)', tier: 'volatile', startPrice: 9 },
+  { symbol: 'NGR', name: 'Netizen Gamble Registry', sector: 'Casino & Hospitality', tier: 'growth', startPrice: 47 },
+  { symbol: 'UNT', name: 'UNITS the Company', sector: 'Diversified Holdings', tier: 'megabluechip', startPrice: 48500 },
+  { symbol: 'JRK', name: 'Jericho Capital', sector: 'Finance', tier: 'growth', startPrice: 132 },
+  { symbol: 'PRK', name: 'PORK Judaism', sector: 'Novelty Goods', tier: 'meme', startPrice: 2.4 },
+  { symbol: 'NIQ', name: 'Q Corp', sector: 'Conglomerate', tier: 'bluechip', startPrice: 305 },
+  { symbol: 'LUQ', name: 'Luqunior Ent', sector: 'Fashion', tier: 'meme', startPrice: 6.5 },
+];
+
+const STOCK_TICK_MS = 32 * 1000;
+// Safety valve: if the server was down a long stretch, still resolve in one pass instead of a
+// pathologically long loop -- price just settles wherever this many ticks lands it.
+const STOCK_TICK_CATCHUP_CAP = 2000;
+const STOCK_SPREAD = 0.01; // 1% each side on buy/sell, matching a real bid/ask spread
+
+function tickStockOnce(stock) {
+  const cfg = STOCK_TIER_CONFIG[stock.tier];
+  stock.price += (stock.fairValue - stock.price) * cfg.pull;
+  stock.price *= 1 + randFloat(-cfg.vol, cfg.vol);
+  stock.price = Math.max(stock.price, stock.fairValue * 0.1, 0.01);
+  // fairValue itself slow-walks too (at a tenth the ticker's usual jitter) so a "blue chip" isn't
+  // anchored to its launch price forever -- just moves far more gradually than the price itself.
+  stock.fairValue *= 1 + randFloat(-cfg.vol * 0.15, cfg.vol * 0.15);
+  stock.fairValue = Math.max(stock.fairValue, 0.01);
+}
+
+// Mutates `stock` (price/fairValue/lastTickAt) in place and returns whether anything changed, so
+// the caller only needs to persist when this returns true.
+function advanceStockTicks(stock, now) {
+  const elapsed = now - stock.lastTickAt;
+  let ticks = Math.floor(elapsed / STOCK_TICK_MS);
+  if (ticks <= 0) return false;
+  ticks = Math.min(ticks, STOCK_TICK_CATCHUP_CAP);
+  for (let i = 0; i < ticks; i += 1) tickStockOnce(stock);
+  stock.lastTickAt += ticks * STOCK_TICK_MS;
+  stock.price = round2(stock.price);
+  stock.fairValue = round2(stock.fairValue);
+  return true;
+}
+
+// A "real" Investors Chat news post jolts the price once, on top of whatever the normal tick does
+// -- roughly 4 ticks' worth of movement landing all at once, in the direction the post implied.
+function applyStockNewsShock(stock, bullish) {
+  const cfg = STOCK_TIER_CONFIG[stock.tier];
+  const magnitude = cfg.vol * 4 * (0.6 + Math.random() * 0.8);
+  stock.price *= 1 + (bullish ? magnitude : -magnitude);
+  stock.price = Math.max(stock.price, stock.fairValue * 0.1, 0.01);
+  stock.price = round2(stock.price);
+}
+
+// Accounts created before the Stock Market shipped won't have this field yet.
+function ensureStocksState(character) {
+  if (!character.stocks) character.stocks = { holdings: {} };
+  return character.stocks;
+}
+
+function doBuyStock(character, stock, qty) {
+  ensureStocksState(character);
+  if (!stock) return { ok: false, reason: 'Unknown stock.' };
+  const q = Math.floor(qty);
+  if (!q || q < 1) return { ok: false, reason: 'Enter a valid quantity.' };
+
+  const buyPrice = round2(stock.price * (1 + STOCK_SPREAD));
+  const cost = round2(buyPrice * q);
+  if (cost > character.cash) return { ok: false, reason: 'Not enough Floydbucks.' };
+
+  character.cash = round2(character.cash - cost);
+  const holding = character.stocks.holdings[stock.symbol] || { qty: 0, avgCost: 0 };
+  const newQty = holding.qty + q;
+  holding.avgCost = round2(((holding.avgCost * holding.qty) + (buyPrice * q)) / newQty);
+  holding.qty = newQty;
+  character.stocks.holdings[stock.symbol] = holding;
+
+  return {
+    ok: true,
+    character,
+    message: `Bought ${q}x ${stock.symbol} @ $${buyPrice.toLocaleString()}. Total: $${cost.toLocaleString()}.`,
+    cls: '',
+  };
+}
+
+function doSellStock(character, stock, qty) {
+  ensureStocksState(character);
+  if (!stock) return { ok: false, reason: 'Unknown stock.' };
+  const holding = character.stocks.holdings[stock.symbol];
+  const q = Math.floor(qty);
+  if (!holding || !q || q < 1 || q > holding.qty) return { ok: false, reason: 'You do not own that many shares.' };
+
+  const sellPrice = round2(stock.price * (1 - STOCK_SPREAD));
+  const proceeds = round2(sellPrice * q);
+  const costBasis = round2(holding.avgCost * q);
+  character.cash = round2(character.cash + proceeds);
+  holding.qty -= q;
+  if (holding.qty <= 0) delete character.stocks.holdings[stock.symbol];
+
+  const netPl = round2(proceeds - costBasis);
+  const sign = netPl >= 0 ? '+' : '-';
+  const message = `Sold ${q}x ${stock.symbol} @ $${sellPrice.toLocaleString()}. Proceeds: $${proceeds.toLocaleString()} (${sign}$${Math.abs(netPl).toLocaleString()} vs cost).`;
+  return { ok: true, character, message, cls: netPl > 0 ? 'gain' : netPl < 0 ? 'loss' : '' };
+}
+
+// ---------- Investors Chat bot posts ----------
+// A pool of fake trader handles -- posts from these read exactly like a real player's chat message
+// (same rendering), just with no title badge and no real account behind them.
+const INVESTOR_BOT_HANDLES = [
+  '@WallStreetWendell', '@MilosBull22', '@ShortKingSam', '@PapaPump', '@DiamondHandsDan',
+  '@FadeEveryRally', '@InsiderIrene', '@QuietQuitTrader', '@TendieTom', '@BearMarketBrenda',
+  '@YoloYolanda', '@ChartGoblin', '@StonksOnlyUp', '@MarginCallMarv', '@RumorHasItRhonda',
+  '@BuyTheDipBrian', '@PennyStockPete', '@OptionsOllie', '@CandlestickCarl', '@FOMOFelicia',
+  '@GrindsetGary', '@LeverageLarry', '@ContrarianCathy', '@ExitLiquidityEd', '@AlphaSeekerAva',
+];
+
+const INVESTOR_NOISE_TEMPLATES = [
+  'market’s just vibes today 🤷',
+  'anyone else just staring at charts doing absolutely nothing',
+  'buying the dip, selling the rip, you know how it goes',
+  'my portfolio and my sleep schedule are both in shambles',
+  'is it too late to become a farmer',
+  'this market has the emotional range of a rock today',
+  'checked my portfolio 40 times today, still broke',
+  'volume’s dead, nobody’s doing anything',
+  'the real gains were the friends we made along the way',
+  'somebody talk me out of an all-in',
+  'why does every trading day feel like a personality test',
+  'not financial advice but also definitely financial advice',
+];
+
+// {symbol}/{name} get swapped for a randomly chosen ticker -- whether a given post is actually
+// true (and moves the price) is decided independently of which template got picked, so the same
+// bullish/bearish phrasing shows up on both real and fake posts. That's the whole point: you can't
+// tell from the writing, only by watching whether the price actually moves afterward.
+const INVESTOR_NEWS_TEMPLATES_BULLISH = [
+  '🚨 hearing {name} ({symbol}) just landed a massive contract',
+  '{symbol} insider buying is off the charts right now',
+  'leaked memo says {name} is about to blow earnings out of the water',
+  'everyone’s sleeping on {symbol}, this is about to run',
+  '{name} ({symbol}) expansion rumors are heating up',
+  'somebody at {name} let it slip they’re about to announce something big',
+];
+
+const INVESTOR_NEWS_TEMPLATES_BEARISH = [
+  '⚠️ {name} ({symbol}) missing earnings again... yikes',
+  'word is {symbol} leadership is jumping ship',
+  '{name} just got hit with a nasty lawsuit, {symbol} not looking good',
+  'heard {symbol}’s supply chain is a mess right now',
+  '{name} ({symbol}) downgrade incoming, get out while you can',
+  'pretty sure {name} is quietly laying people off',
+];
+
+function pickRandom(arr) {
+  return arr[randInt(0, arr.length - 1)];
+}
+
+// Generates one NPC Investors Chat post. Half the time it's pure banter with no mechanical
+// effect; the other half it's a ticker-specific "news" post that is only actually true ~35% of the
+// time. Returns { senderName, message, stockSymbol, isReal, bullish } -- the caller applies
+// applyStockNewsShock() when isReal is true and stockSymbol is set.
+function generateInvestorBotPost(stocks) {
+  const senderName = pickRandom(INVESTOR_BOT_HANDLES);
+  const isNews = Math.random() < 0.5 && stocks.length > 0;
+
+  if (!isNews) {
+    return { senderName, message: pickRandom(INVESTOR_NOISE_TEMPLATES), stockSymbol: null, isReal: false, bullish: null };
+  }
+
+  const stock = pickRandom(stocks);
+  const bullish = Math.random() < 0.5;
+  const template = pickRandom(bullish ? INVESTOR_NEWS_TEMPLATES_BULLISH : INVESTOR_NEWS_TEMPLATES_BEARISH);
+  const message = template.replace('{symbol}', stock.symbol).replace('{name}', stock.name);
+  const isReal = Math.random() < 0.35;
+  return { senderName, message, stockSymbol: stock.symbol, isReal, bullish };
+}
+
 module.exports = {
   newCharacter,
   resetCharacterKeepCosmetics,
@@ -2899,4 +3091,14 @@ module.exports = {
   isMaxxComplete,
   doStretchForHeight,
   ensureWeightState,
+  STOCK_DEFINITIONS,
+  STOCK_TICK_MS,
+  advanceStockTicks,
+  applyStockNewsShock,
+  ensureStocksState,
+  doBuyStock,
+  doSellStock,
+  generateInvestorBotPost,
+  randInt,
+  randFloat,
 };
