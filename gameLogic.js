@@ -17,7 +17,7 @@ const CRIME_TIERS_BY_ID = {
   shoplift: { id: 'shoplift', name: '🛍️ Shoplifting', minReward: 64, maxReward: 160, jailYears: 1, baseRisk: 0.35 },
   pettytheft: { id: 'pettytheft', name: '👛 Petty Theft', minReward: 280, maxReward: 520, jailYears: 1, baseRisk: 0.45 },
   burglary: { id: 'burglary', name: '🏚️ Burglary', minReward: 960, maxReward: 1760, jailYears: 4, baseRisk: 0.5 },
-  grandtheft: { id: 'grandtheft', name: '🚗 Grand Theft Auto', minReward: 3200, maxReward: 4800, jailYears: 10, baseRisk: 0.6 },
+  grandtheft: { id: 'grandtheft', name: '🚗 Grand Theft Auto', minReward: 1800, maxReward: 2000, jailYears: 6, baseRisk: 0.6 },
 };
 const CRIME_COOLDOWN_MS = 12000;
 const CRIME_RISK_MIN = 0.05;
