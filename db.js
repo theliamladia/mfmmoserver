@@ -29,6 +29,15 @@ if (!hasMilosLastSeen) {
   db.exec('ALTER TABLE users ADD COLUMN milos_last_seen INTEGER NOT NULL DEFAULT 0');
 }
 
+// Optimistic-concurrency guard for /character/sync (see server.js) -- a stale tab/device pushing
+// its own out-of-date character blob would otherwise silently roll back whatever a newer session
+// already saved (a real incident: a player's FC and titles reverted ~2 hours after a stale second
+// tab synced over them). Bumped on every saveCharacter() call regardless of source.
+const hasCharacterRev = db.prepare('PRAGMA table_info(users)').all().some((col) => col.name === 'character_rev');
+if (!hasCharacterRev) {
+  db.exec('ALTER TABLE users ADD COLUMN character_rev INTEGER NOT NULL DEFAULT 0');
+}
+
 // Server-wide state (pause + active modifier): a single shared row, same reasoning as the other
 // shared tables -- the admin's pause/modifier toggle has to be visible to every player, not just
 // stored per-character. Previously this lived in each browser's own local storage, which meant
@@ -239,8 +248,19 @@ function getUserById(id) {
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
 }
 
+// Bumps character_rev on every single save, from any source (a normal action or a /character/sync
+// call) -- this is what lets /character/sync detect a stale write (see server.js): the client
+// echoes back the rev it last saw, and a mismatch means something else already saved a newer
+// version since then (a second tab/device is the common case). Returns the new rev so the caller
+// can hand it back to the client.
+function getCharacterRev(userId) {
+  const row = db.prepare('SELECT character_rev FROM users WHERE id = ?').get(userId);
+  return row ? row.character_rev : null;
+}
+
 function saveCharacter(userId, character) {
-  db.prepare('UPDATE users SET character_json = ? WHERE id = ?').run(JSON.stringify(character), userId);
+  db.prepare('UPDATE users SET character_json = ?, character_rev = character_rev + 1 WHERE id = ?').run(JSON.stringify(character), userId);
+  return db.prepare('SELECT character_rev FROM users WHERE id = ?').get(userId).character_rev;
 }
 
 // Transaction log: an audit trail of every action that actually moves a player's cash (Floydbucks)
@@ -815,6 +835,7 @@ module.exports = {
   getRandomOtherUserCharacterName,
   getUserById,
   saveCharacter,
+  getCharacterRev,
   touchLastSeen,
   getOnlineUsers,
   createListing,

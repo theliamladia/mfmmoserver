@@ -10,6 +10,7 @@ const {
   getRandomOtherUserCharacterName,
   getUserById,
   saveCharacter,
+  getCharacterRev,
   getOnlineUsers,
   touchLastSeen,
   createListing,
@@ -205,6 +206,23 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 app.use(cors({ origin: ALLOWED_ORIGINS }));
 app.use(express.json());
 
+// Auto-attaches the caller's current character_rev to any response that includes a `character` --
+// powers /character/sync's stale-write check (see below) without having to thread rev through
+// every single route by hand (60+ single-character routes via runAction, plus a dozen+
+// two-character PvP/marketplace routes). Works because this wraps res.json before requireAuth
+// runs, but only actually reads req.user at the moment the route handler calls res.json, by which
+// point requireAuth (earlier in this same request's middleware chain) has already set it.
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    if (body && typeof body === 'object' && body.character && typeof body.rev === 'undefined' && req.user && req.user.sub) {
+      body.rev = getCharacterRev(req.user.sub);
+    }
+    return originalJson(body);
+  };
+  next();
+});
+
 // Leaderboard titles (LOOKSMAXXER / HIGHEST NET WORTH / HIGHEST LEVEL) are recomputed once a day,
 // check-on-poll style like everything else in this codebase -- no cron. This middleware runs on
 // every request so the daily rollover happens promptly no matter which page anyone is on, but the
@@ -296,7 +314,7 @@ app.post('/auth/register', (req, res) => {
   const userId = createUser(username, hashPassword(password), character);
   const token = issueToken(userId, username);
 
-  res.json({ ok: true, token, character, serverTime: Date.now() });
+  res.json({ ok: true, token, character, rev: getCharacterRev(userId), serverTime: Date.now() });
 });
 
 app.post('/auth/login', (req, res) => {
@@ -309,7 +327,7 @@ app.post('/auth/login', (req, res) => {
 
   touchLastSeen(user.id);
   const token = issueToken(user.id, user.username);
-  res.json({ ok: true, token, character: JSON.parse(user.character_json), serverTime: Date.now() });
+  res.json({ ok: true, token, character: JSON.parse(user.character_json), rev: user.character_rev, serverTime: Date.now() });
 });
 
 app.get('/me', requireAuth, (req, res) => {
@@ -865,12 +883,26 @@ app.post('/character/sync', (req, res) => {
   if (!payload) return res.status(401).json({ ok: false, reason: 'Invalid or expired token.' });
   if (isMaintenanceBlocked({ user: payload })) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
 
-  const { character } = req.body || {};
+  const { character, expectedRev } = req.body || {};
   if (!character || typeof character !== 'object') {
     return res.status(400).json({ ok: false, reason: 'Missing character.' });
   }
-  saveCharacter(payload.sub, character);
-  res.json({ ok: true });
+
+  // Rejects a stale write instead of blindly overwriting -- a real incident this prevents: a
+  // second tab/device left open with an older in-memory character silently rolling back whatever
+  // a newer session had already saved (titles and FC both vanished at once, since they're just
+  // fields inside this same blob). `expectedRev` is the rev this client last saw; a mismatch means
+  // something else already saved a newer version since then. Missing/non-numeric expectedRev
+  // skips the check (an older client build that predates this guard) rather than hard-failing.
+  if (typeof expectedRev === 'number') {
+    const currentRev = getCharacterRev(payload.sub);
+    if (currentRev !== null && expectedRev !== currentRev) {
+      return res.status(409).json({ ok: false, reason: 'stale_sync', currentRev });
+    }
+  }
+
+  const rev = saveCharacter(payload.sub, character);
+  res.json({ ok: true, rev });
 });
 
 // Loads the caller's character, runs a do<X>(character, ...args) action against it, and persists
