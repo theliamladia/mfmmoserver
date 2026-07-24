@@ -2843,10 +2843,23 @@ function applyStockNewsShock(stock, bullish) {
   stock.price = round2(stock.price);
 }
 
-// Accounts created before the Stock Market shipped won't have this field yet.
+// Accounts created before the Stock Market (or before the performance log) shipped won't have
+// these fields yet.
+const STOCK_TRANSACTION_HISTORY_LIMIT = 200;
+
 function ensureStocksState(character) {
   if (!character.stocks) character.stocks = { holdings: {} };
+  if (!character.stocks.transactions) character.stocks.transactions = [];
+  if (typeof character.stocks.realizedPl !== 'number') character.stocks.realizedPl = 0;
   return character.stocks;
+}
+
+// Newest first -- callers paginate straight off the front of the array with no reversal needed.
+function recordStockTransaction(character, entry) {
+  character.stocks.transactions.unshift(entry);
+  if (character.stocks.transactions.length > STOCK_TRANSACTION_HISTORY_LIMIT) {
+    character.stocks.transactions.length = STOCK_TRANSACTION_HISTORY_LIMIT;
+  }
 }
 
 function doBuyStock(character, stock, qty) {
@@ -2865,6 +2878,10 @@ function doBuyStock(character, stock, qty) {
   holding.avgCost = round2(((holding.avgCost * holding.qty) + (buyPrice * q)) / newQty);
   holding.qty = newQty;
   character.stocks.holdings[stock.symbol] = holding;
+
+  recordStockTransaction(character, {
+    type: 'buy', symbol: stock.symbol, qty: q, price: buyPrice, total: cost, pl: null, ts: Date.now(),
+  });
 
   return {
     ok: true,
@@ -2889,6 +2906,11 @@ function doSellStock(character, stock, qty) {
   if (holding.qty <= 0) delete character.stocks.holdings[stock.symbol];
 
   const netPl = round2(proceeds - costBasis);
+  character.stocks.realizedPl = round2(character.stocks.realizedPl + netPl);
+  recordStockTransaction(character, {
+    type: 'sell', symbol: stock.symbol, qty: q, price: sellPrice, total: proceeds, pl: netPl, ts: Date.now(),
+  });
+
   const sign = netPl >= 0 ? '+' : '-';
   const message = `Sold ${q}x ${stock.symbol} @ $${sellPrice.toLocaleString()}. Proceeds: $${proceeds.toLocaleString()} (${sign}$${Math.abs(netPl).toLocaleString()} vs cost).`;
   return { ok: true, character, message, cls: netPl > 0 ? 'gain' : netPl < 0 ? 'loss' : '' };
