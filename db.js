@@ -701,6 +701,35 @@ function markMtnSaleNotificationsSeen(userId) {
   db.prepare('UPDATE mtn_sale_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
 }
 
+// Player reports (bug/wipe/suggestion) -- a shared table since only the admin account reads them
+// back, unlike per-character storage. Read side supports pagination + an optional type filter for
+// the admin's Report Logs modal.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+function createReport(userId, username, type, message) {
+  db.prepare('INSERT INTO reports (user_id, username, type, message, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(userId, username, type, message, Date.now());
+}
+
+function getReportsPage(page, pageSize, typeFilter) {
+  const where = typeFilter ? 'WHERE type = ?' : '';
+  const params = typeFilter ? [typeFilter] : [];
+  const total = db.prepare(`SELECT COUNT(*) AS c FROM reports ${where}`).get(...params).c;
+  const rows = db
+    .prepare(`SELECT * FROM reports ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, pageSize, page * pageSize);
+  return { rows, total };
+}
+
 // Robbery notifications: same reasoning as payment_notifications -- the victim needs to learn
 // they were robbed even though they never triggered the request. Unlike payments (a quiet bell
 // badge), robberies pop an alert modal client-side, so the client fetches unseen rows directly
@@ -917,6 +946,8 @@ module.exports = {
   getMtnSaleNotifications,
   getUnseenMtnSaleCount,
   markMtnSaleNotificationsSeen,
+  createReport,
+  getReportsPage,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,

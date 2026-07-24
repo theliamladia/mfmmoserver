@@ -68,6 +68,8 @@ const {
   getMtnSaleNotifications,
   getUnseenMtnSaleCount,
   markMtnSaleNotificationsSeen,
+  createReport,
+  getReportsPage,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
@@ -184,6 +186,9 @@ const {
   doCollectCrypto,
   doSellFC,
   doBuyFC,
+  doDepositColdStorage,
+  doWithdrawColdStorage,
+  doBuyColdStorageUpgrade,
   ALTCOIN_SUPPLY,
   altcoinPriceAt,
   doMintAltcoin,
@@ -1103,6 +1108,15 @@ app.post('/crypto/buy', requireAuth, (req, res) => {
   const { amount } = req.body || {};
   runAction(req, res, doBuyFC, Number(amount));
 });
+app.post('/crypto/cold-storage/deposit', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doDepositColdStorage, Number(amount));
+});
+app.post('/crypto/cold-storage/withdraw', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doWithdrawColdStorage, Number(amount));
+});
+app.post('/crypto/cold-storage/upgrade', requireAuth, (req, res) => runAction(req, res, doBuyColdStorageUpgrade));
 
 app.post('/jobs/good/apply', requireAuth, (req, res) => {
   const { jobId } = req.body || {};
@@ -1611,6 +1625,34 @@ function requireAdminPassword(req, res, next) {
   }
   next();
 }
+
+// ---------- Reports (bug/wipe/suggestion) ----------
+const REPORT_TYPES = ['bug', 'wipe', 'suggestion'];
+const REPORT_MESSAGE_MAX_LEN = 2000;
+const REPORT_PAGE_SIZE = 20;
+
+app.post('/reports/submit', requireAuth, (req, res) => {
+  const { type, message } = req.body || {};
+  const trimmed = (message || '').trim();
+  if (!REPORT_TYPES.includes(type)) return res.status(400).json({ ok: false, reason: 'Unknown report type.' });
+  if (!trimmed) return res.status(400).json({ ok: false, reason: 'Enter a message.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  createReport(user.id, user.username, type, trimmed.slice(0, REPORT_MESSAGE_MAX_LEN));
+  res.json({ ok: true, message: 'Submitted. Thanks!' });
+});
+
+function serializeReport(row) {
+  return { id: row.id, username: row.username, type: row.type, message: row.message, createdAt: row.created_at };
+}
+
+app.get('/reports/list', requireAuth, requireAdminPassword, (req, res) => {
+  const page = Math.max(0, parseInt(req.query.page, 10) || 0);
+  const typeFilter = REPORT_TYPES.includes(req.query.type) ? req.query.type : null;
+  const { rows, total } = getReportsPage(page, REPORT_PAGE_SIZE, typeFilter);
+  res.json({ ok: true, reports: rows.map(serializeReport), total, page, pageSize: REPORT_PAGE_SIZE });
+});
 
 // Maintenance mode blocks every server-authoritative action (and the trust-based sync) for
 // everyone except the admin account, so mrleems can still play/test while it's on. Referenced by

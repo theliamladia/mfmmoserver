@@ -2525,11 +2525,65 @@ const CRYPTO_UPGRADE_TIERS = {
   ],
 };
 
+// Cold Storage: an offline FC vault sitting alongside the hot wallet (crypto.fc) -- capacity-
+// capped, upgradeable with cash, and immune to tryDrainCryptoWallet below since that function only
+// ever touches crypto.fc, never crypto.coldStorage.fc.
+const COLD_STORAGE_BASE_CAP = 10;
+const COLD_STORAGE_UPGRADE_TIERS = [
+  { addCap: 15, cost: 5000 },
+  { addCap: 25, cost: 12000 },
+  { addCap: 50, cost: 25000 },
+];
+
 function ensureCryptoState(character) {
   if (!character.crypto) {
     character.crypto = { ramTier: 0, cpuTier: 0, gpuTier: 0, fc: 0, lastCollectedAt: Date.now() };
   }
+  if (!character.crypto.coldStorage) {
+    character.crypto.coldStorage = { fc: 0, tier: 0 };
+  }
   return character.crypto;
+}
+
+function coldStorageCapacity(coldStorage) {
+  return COLD_STORAGE_BASE_CAP + COLD_STORAGE_UPGRADE_TIERS.slice(0, coldStorage.tier).reduce((sum, t) => sum + t.addCap, 0);
+}
+
+function doDepositColdStorage(character, amount) {
+  const crypto = ensureCryptoState(character);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  if (amount > crypto.fc) return { ok: false, reason: "You don't have that much FC in your hot wallet." };
+  const capacity = coldStorageCapacity(crypto.coldStorage);
+  const room = round4(capacity - crypto.coldStorage.fc);
+  if (amount > room) return { ok: false, reason: `Cold Storage only has room for ${room.toFixed(4)} more FC.` };
+  crypto.fc = round4(crypto.fc - amount);
+  crypto.coldStorage.fc = round4(crypto.coldStorage.fc + amount);
+  return { ok: true, message: `Moved ${amount} FC into Cold Storage.`, cls: 'gain', character };
+}
+
+function doWithdrawColdStorage(character, amount) {
+  const crypto = ensureCryptoState(character);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  if (amount > crypto.coldStorage.fc) return { ok: false, reason: "You don't have that much FC in Cold Storage." };
+  crypto.coldStorage.fc = round4(crypto.coldStorage.fc - amount);
+  crypto.fc = round4(crypto.fc + amount);
+  return { ok: true, message: `Moved ${amount} FC back to your hot wallet.`, cls: '', character };
+}
+
+function doBuyColdStorageUpgrade(character) {
+  const crypto = ensureCryptoState(character);
+  const tiers = COLD_STORAGE_UPGRADE_TIERS;
+  if (crypto.coldStorage.tier >= tiers.length) return { ok: false, reason: 'Already maxed out.' };
+  const next = tiers[crypto.coldStorage.tier];
+  if (character.cash < next.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - next.cost);
+  crypto.coldStorage.tier += 1;
+  return {
+    ok: true,
+    message: `Cold Storage upgraded to tier ${crypto.coldStorage.tier} (capacity now ${coldStorageCapacity(crypto.coldStorage)} FC).`,
+    cls: 'gain',
+    character,
+  };
 }
 
 function cryptoDailyRate(crypto) {
@@ -2589,14 +2643,21 @@ function doBuyFC(character, amount) {
 }
 
 // Called from a successful NMC robbery against a victim with an FC balance -- the "wallet-drain"
-// risk from the design doc, same speed-scaled shape as the shipment-interception roll.
+// risk from the design doc, same speed-scaled shape as the shipment-interception roll. Drain rate
+// cut ~90% (was 10-30% of balance, now 1-3%) and hard-capped at 3 FC total per robbery -- draining
+// a bystander's entire mining payout in one hit was too punishing relative to how passive FC
+// income is. Cold Storage (see above) is the intended way to protect a stash from this entirely.
+const FC_ROBBERY_DRAIN_MIN = 0.01;
+const FC_ROBBERY_DRAIN_MAX = 0.03;
+const FC_ROBBERY_MAX_TOTAL = 3;
+
 function tryDrainCryptoWallet(attacker, target) {
   const targetCrypto = ensureCryptoState(target);
   if (targetCrypto.fc <= 0) return null;
   const chance = Math.min(0.25, (attacker.stats.speed / 100) * 0.3);
   if (Math.random() >= chance) return null;
 
-  const drained = round4(targetCrypto.fc * randFloat(0.1, 0.3));
+  const drained = round4(Math.min(targetCrypto.fc * randFloat(FC_ROBBERY_DRAIN_MIN, FC_ROBBERY_DRAIN_MAX), FC_ROBBERY_MAX_TOTAL));
   if (drained <= 0) return null;
   targetCrypto.fc = round4(targetCrypto.fc - drained);
   const attackerCrypto = ensureCryptoState(attacker);
@@ -3042,6 +3103,12 @@ module.exports = {
   doCollectCrypto,
   doSellFC,
   doBuyFC,
+  COLD_STORAGE_BASE_CAP,
+  COLD_STORAGE_UPGRADE_TIERS,
+  coldStorageCapacity,
+  doDepositColdStorage,
+  doWithdrawColdStorage,
+  doBuyColdStorageUpgrade,
   cryptoDailyRate,
   CRYPTO_UPGRADE_TIERS,
   FC_START_PRICE,
