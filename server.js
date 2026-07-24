@@ -64,6 +64,10 @@ const {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  createMtnSaleNotification,
+  getMtnSaleNotifications,
+  getUnseenMtnSaleCount,
+  markMtnSaleNotificationsSeen,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
@@ -452,6 +456,35 @@ app.post('/notifications/payments/seen', requireAuth, (req, res) => {
     ok: true,
     notifications: getPaymentNotifications(req.user.sub).map(serializePaymentNotification),
     unseenCount: getUnseenPaymentCount(req.user.sub),
+  });
+});
+
+function serializeMtnSaleNotification(row) {
+  return {
+    id: row.id,
+    buyerName: row.buyer_name,
+    itemId: row.item_id,
+    qty: row.qty,
+    total: row.total,
+    createdAt: row.created_at,
+    seen: !!row.seen,
+  };
+}
+
+app.get('/notifications/mtn-sales', requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    notifications: getMtnSaleNotifications(req.user.sub).map(serializeMtnSaleNotification),
+    unseenCount: getUnseenMtnSaleCount(req.user.sub),
+  });
+});
+
+app.post('/notifications/mtn-sales/seen', requireAuth, (req, res) => {
+  markMtnSaleNotificationsSeen(req.user.sub);
+  res.json({
+    ok: true,
+    notifications: getMtnSaleNotifications(req.user.sub).map(serializeMtnSaleNotification),
+    unseenCount: getUnseenMtnSaleCount(req.user.sub),
   });
 });
 
@@ -1295,6 +1328,7 @@ app.post('/mtn/buy', requireAuth, (req, res) => {
       creditSellerForSale(sellerCharacter, listing.item_id, listing.qty, total, `${buyerCharacter.firstName} ${buyerCharacter.lastName}`);
       logTransaction(sellerUser.id, `${sellerCharacter.firstName} ${sellerCharacter.lastName}`, 'mtn/sell', total, sellerCharacter.cash);
       saveCharacter(sellerUser.id, sellerCharacter);
+      createMtnSaleNotification(sellerUser.id, `${buyerCharacter.firstName} ${buyerCharacter.lastName}`, listing.item_id, listing.qty, total);
     }
   }
 

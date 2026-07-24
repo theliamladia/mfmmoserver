@@ -662,6 +662,45 @@ function markPaymentNotificationsSeen(userId) {
   db.prepare('UPDATE payment_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
 }
 
+// MTN sale notifications: same reasoning/shape as payment_notifications -- the seller needs to
+// learn their listing sold even though they never triggered the buy request, and this is quiet
+// good news (bell badge), not an interrupt modal like robbery/slime.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS mtn_sale_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER NOT NULL,
+    buyer_name TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    total REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const MTN_SALE_NOTIFICATION_LIMIT = 20;
+
+function createMtnSaleNotification(recipientUserId, buyerName, itemId, qty, total) {
+  db.prepare(
+    'INSERT INTO mtn_sale_notifications (recipient_user_id, buyer_name, item_id, qty, total, created_at, seen) VALUES (?, ?, ?, ?, ?, ?, 0)'
+  ).run(recipientUserId, buyerName, itemId, qty, total, Date.now());
+}
+
+function getMtnSaleNotifications(userId) {
+  return db
+    .prepare('SELECT * FROM mtn_sale_notifications WHERE recipient_user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(userId, MTN_SALE_NOTIFICATION_LIMIT);
+}
+
+function getUnseenMtnSaleCount(userId) {
+  return db
+    .prepare('SELECT COUNT(*) AS c FROM mtn_sale_notifications WHERE recipient_user_id = ? AND seen = 0')
+    .get(userId).c;
+}
+
+function markMtnSaleNotificationsSeen(userId) {
+  db.prepare('UPDATE mtn_sale_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
+}
+
 // Robbery notifications: same reasoning as payment_notifications -- the victim needs to learn
 // they were robbed even though they never triggered the request. Unlike payments (a quiet bell
 // badge), robberies pop an alert modal client-side, so the client fetches unseen rows directly
@@ -874,6 +913,10 @@ module.exports = {
   getPaymentNotifications,
   getUnseenPaymentCount,
   markPaymentNotificationsSeen,
+  createMtnSaleNotification,
+  getMtnSaleNotifications,
+  getUnseenMtnSaleCount,
+  markMtnSaleNotificationsSeen,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
