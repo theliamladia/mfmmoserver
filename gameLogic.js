@@ -246,14 +246,38 @@ function isMaxxComplete(character) {
 const SUITS = ['♠', '♥', '♦', '♣'];
 const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
-const SLOT_SYMBOLS = [
-  { symbol: '\u{1F352}', weight: 35, three: 2 }, // cherries
-  { symbol: '\u{1F34B}', weight: 25, three: 3 }, // lemon
-  { symbol: '\u{1F514}', weight: 20, three: 5 }, // bell
-  { symbol: '⭐', weight: 12, three: 10 }, // star
-  { symbol: '7️⃣', weight: 6, three: 20 }, // seven
-  { symbol: '\u{1F48E}', weight: 2, three: 50 }, // diamond
+const SURVIVOR_SLOT_SYMBOLS = [
+  { symbol: '\u{1F352}', weight: 35, match: 2 }, // cherries
+  { symbol: '\u{1F34B}', weight: 25, match: 3 }, // lemon
+  { symbol: '\u{1F514}', weight: 20, match: 5 }, // bell
+  { symbol: '⭐', weight: 12, match: 10 }, // star
+  { symbol: '7️⃣', weight: 6, match: 20 }, // seven
+  { symbol: '\u{1F48E}', weight: 2, match: 50 }, // diamond
 ];
+
+const ZEUS_SLOT_SYMBOLS = [
+  { symbol: '☁️', weight: 30, match: 5 },
+  { symbol: '🌧️', weight: 24, match: 8 },
+  { symbol: '⚡', weight: 18, match: 20 },
+  { symbol: '🌩️', weight: 12, match: 50 },
+  { symbol: '🔱', weight: 6, match: 150 },
+  { symbol: '👑', weight: 2, match: 750 },
+];
+
+const ELITE_SLOT_SYMBOLS = [
+  { symbol: '💵', weight: 30, match: 10 },
+  { symbol: '💎', weight: 22, match: 30 },
+  { symbol: '🏆', weight: 16, match: 100 },
+  { symbol: '🎰', weight: 10, match: 300 },
+  { symbol: '🔥', weight: 5, match: 1000 },
+  { symbol: '👑', weight: 1, match: 10000 },
+];
+
+const SLOT_MACHINES = {
+  survivor: { label: 'Lone Slotvivor', minBet: 10, reelCount: 3, symbols: SURVIVOR_SLOT_SYMBOLS },
+  zeus: { label: 'Zeus: King of Storms', minBet: 100, reelCount: 4, symbols: ZEUS_SLOT_SYMBOLS },
+  elite: { label: 'ELITE Slots', minBet: 10000, reelCount: 6, symbols: ELITE_SLOT_SYMBOLS },
+};
 
 const DEALER_TIER_IDS = ['guzman', 'esteban', 'ramon', 'dmitri'];
 const CRIME_TIER_IDS = ['shoplift', 'pettytheft', 'burglary', 'grandtheft'];
@@ -473,10 +497,21 @@ function resetCharacterKeepCosmetics(character) {
   return fresh;
 }
 
-// Accounts created before blackjack moved server-side won't have this field yet.
+// Accounts created before blackjack moved server-side (or before split/double support) won't have
+// the `hands` array yet -- migrate the old single-hand shape into hands[0] on first touch.
 function ensureBlackjackState(character) {
   if (!character.blackjack) {
-    character.blackjack = { phase: 'betting', playerCards: [], dealerCards: [], bet: 0 };
+    character.blackjack = { phase: 'betting', dealerCards: [], hands: [], activeHand: 0 };
+  } else if (!character.blackjack.hands) {
+    const bj = character.blackjack;
+    character.blackjack = {
+      phase: bj.phase || 'betting',
+      dealerCards: bj.dealerCards || [],
+      hands: bj.bet > 0 || (bj.playerCards || []).length
+        ? [{ cards: bj.playerCards || [], bet: bj.bet || 0, done: false }]
+        : [],
+      activeHand: 0,
+    };
   }
   return character.blackjack;
 }
@@ -795,46 +830,69 @@ function isBlackjack(cards) {
   return cards.length === 2 && handTotal(cards) === 21;
 }
 
-// Mirrors the client's doResolveBlackjack() exactly -- dealer draws to 17, then settles the bet.
+// Settles one hand against an already-resolved dealer hand. `splitHand` disables the 3:2 natural
+// blackjack payout, matching standard house rules that a post-split 21 counts as a plain 21.
+function settleBlackjackHand(hand, dealerCards, splitHand) {
+  const dealerTotal = handTotal(dealerCards);
+  const dealerBJ = isBlackjack(dealerCards);
+  const playerTotal = handTotal(hand.cards);
+  const playerBJ = !splitHand && isBlackjack(hand.cards);
+
+  if (playerTotal > 21) return { payout: 0, msg: `Busted with ${playerTotal}. You lose.` };
+  if (playerBJ && dealerBJ) return { payout: hand.bet, msg: 'Both blackjack! Push.' };
+  if (playerBJ) return { payout: Math.floor(hand.bet * 2.5), msg: 'Blackjack! You win 3:2.' };
+  if (dealerBJ) return { payout: 0, msg: 'Dealer blackjack. You lose.' };
+  if (dealerTotal > 21) return { payout: hand.bet * 2, msg: `Dealer busts with ${dealerTotal}. You win!` };
+  if (playerTotal > dealerTotal) return { payout: hand.bet * 2, msg: `You win ${playerTotal} vs ${dealerTotal}.` };
+  if (playerTotal === dealerTotal) return { payout: hand.bet, msg: `Push at ${playerTotal}.` };
+  return { payout: 0, msg: `Dealer wins ${dealerTotal} vs ${playerTotal}.` };
+}
+
+// Dealer draws to 17 once (shared across every hand, split or not), then every hand is settled
+// independently and payouts summed -- mirrors the old single-hand resolveBlackjack but fans out
+// across bj.hands so split hands each get their own payout/message.
 function resolveBlackjack(character) {
   const bj = character.blackjack;
-  while (handTotal(bj.dealerCards) < 17) {
-    bj.dealerCards.push(drawCard());
-  }
-  const playerTotal = handTotal(bj.playerCards);
-  const dealerTotal = handTotal(bj.dealerCards);
-  const playerBJ = isBlackjack(bj.playerCards);
-  const dealerBJ = isBlackjack(bj.dealerCards);
-
-  let payout = 0;
-  let msg = '';
-  if (playerBJ && dealerBJ) {
-    payout = bj.bet;
-    msg = 'Both blackjack! Push.';
-  } else if (playerBJ) {
-    payout = Math.floor(bj.bet * 2.5);
-    msg = 'Blackjack! You win 3:2.';
-  } else if (dealerBJ) {
-    payout = 0;
-    msg = 'Dealer blackjack. You lose.';
-  } else if (dealerTotal > 21) {
-    payout = bj.bet * 2;
-    msg = `Dealer busts with ${dealerTotal}. You win!`;
-  } else if (playerTotal > dealerTotal) {
-    payout = bj.bet * 2;
-    msg = `You win ${playerTotal} vs ${dealerTotal}.`;
-  } else if (playerTotal === dealerTotal) {
-    payout = bj.bet;
-    msg = `Push at ${playerTotal}.`;
-  } else {
-    payout = 0;
-    msg = `Dealer wins ${dealerTotal} vs ${playerTotal}.`;
+  const anyoneStillIn = bj.hands.some((h) => handTotal(h.cards) <= 21);
+  if (anyoneStillIn) {
+    while (handTotal(bj.dealerCards) < 17) bj.dealerCards.push(drawCard());
   }
 
-  character.chips += payout;
-  const cls = payout > bj.bet ? 'gain' : (payout === bj.bet ? '' : 'loss');
+  const splitHands = bj.hands.length > 1;
+  let totalPayout = 0;
+  let totalBet = 0;
+  const messages = bj.hands.map((hand, i) => {
+    const { payout, msg } = settleBlackjackHand(hand, bj.dealerCards, splitHands);
+    totalPayout += payout;
+    totalBet += hand.bet;
+    return splitHands ? `Hand ${i + 1}: ${msg}` : msg;
+  });
+
+  character.chips += totalPayout;
+  const cls = totalPayout > totalBet ? 'gain' : (totalPayout === totalBet ? '' : 'loss');
   bj.phase = 'betting';
-  return { ok: true, message: `${msg} (bet ${bj.bet}, payout ${payout})`, cls, resolved: true, character };
+  bj.hands = [];
+  bj.activeHand = 0;
+  return {
+    ok: true,
+    message: `${messages.join(' ')} (bet ${totalBet}, payout ${totalPayout})`,
+    cls,
+    resolved: true,
+    character,
+  };
+}
+
+// Advances to the next hand still in play (not done, not busted, not already 21), or resolves the
+// round with the dealer if every hand has finished acting.
+function advanceBlackjackHand(character) {
+  const bj = character.blackjack;
+  const next = bj.hands.findIndex((h, i) => i > bj.activeHand && !h.done);
+  if (next !== -1) {
+    bj.activeHand = next;
+    return { ok: true, resolved: false, character };
+  }
+  bj.phase = 'dealerTurn';
+  return resolveBlackjack(character);
 }
 
 // ---------- Roulette ----------
@@ -904,81 +962,129 @@ function doRouletteSpin(character, bets) {
   return { ok: true, character, resultNumber, color, totalBet: total, payout, message, cls: payout > total ? 'gain' : payout === total ? '' : 'loss' };
 }
 
-// Mirrors the client's doBjDeal() exactly, including the natural-blackjack auto-resolve.
 function doBjDeal(character, bet) {
   const bj = ensureBlackjackState(character);
   if (!bet || bet < 1) return { ok: false, reason: 'Enter a valid bet.' };
   if (bet > character.chips) return { ok: false, reason: 'Not enough Chips.' };
 
   character.chips -= bet;
-  character.blackjack = { phase: 'playerTurn', playerCards: [drawCard(), drawCard()], dealerCards: [drawCard(), drawCard()], bet };
+  character.blackjack = {
+    phase: 'playerTurn',
+    dealerCards: [drawCard(), drawCard()],
+    hands: [{ cards: [drawCard(), drawCard()], bet, done: false }],
+    activeHand: 0,
+  };
 
-  if (isBlackjack(character.blackjack.playerCards) || isBlackjack(character.blackjack.dealerCards)) {
+  if (isBlackjack(character.blackjack.hands[0].cards) || isBlackjack(character.blackjack.dealerCards)) {
+    character.blackjack.hands[0].done = true;
     return resolveBlackjack(character);
   }
   return { ok: true, resolved: false, character };
 }
 
-// Mirrors the client's doBjHit() exactly, including the instant-bust resolve.
 function doBjHit(character) {
   const bj = ensureBlackjackState(character);
   if (bj.phase !== 'playerTurn') return { ok: false, reason: 'No hand in progress.' };
+  const hand = bj.hands[bj.activeHand];
 
-  bj.playerCards.push(drawCard());
-  const total = handTotal(bj.playerCards);
-  if (total > 21) {
-    bj.phase = 'betting';
-    const bet = bj.bet;
-    bj.bet = 0;
-    return { ok: true, message: `Busted with ${total}! You lose. (bet ${bet}, payout 0)`, cls: 'loss', resolved: true, character };
+  hand.cards.push(drawCard());
+  if (handTotal(hand.cards) > 21) {
+    hand.done = true;
+    return advanceBlackjackHand(character);
   }
   return { ok: true, resolved: false, character };
 }
 
-// Mirrors the client's doBjStand() exactly -- moves to the dealer's turn and settles.
 function doBjStand(character) {
   const bj = ensureBlackjackState(character);
   if (bj.phase !== 'playerTurn') return { ok: false, reason: 'No hand in progress.' };
-  bj.phase = 'dealerTurn';
-  return resolveBlackjack(character);
+  bj.hands[bj.activeHand].done = true;
+  return advanceBlackjackHand(character);
 }
 
-function weightedSlotSymbol() {
-  const totalWeight = SLOT_SYMBOLS.reduce((sum, s) => sum + s.weight, 0);
+// Doubles the active hand's bet, draws exactly one card, then stands it -- only legal as the
+// hand's first decision (still holding its original two cards).
+function doBjDouble(character) {
+  const bj = ensureBlackjackState(character);
+  if (bj.phase !== 'playerTurn') return { ok: false, reason: 'No hand in progress.' };
+  const hand = bj.hands[bj.activeHand];
+  if (hand.cards.length !== 2) return { ok: false, reason: 'Can only double on your first two cards.' };
+  if (hand.bet > character.chips) return { ok: false, reason: 'Not enough Chips to double.' };
+
+  character.chips -= hand.bet;
+  hand.bet *= 2;
+  hand.cards.push(drawCard());
+  hand.done = true;
+  return advanceBlackjackHand(character);
+}
+
+// Splits the active hand into two hands of one card each (plus a fresh second card apiece) when
+// both starting cards share the same value -- only legal as that hand's first decision, and only
+// once per round (no re-splitting a hand that already came from a split).
+function doBjSplit(character) {
+  const bj = ensureBlackjackState(character);
+  if (bj.phase !== 'playerTurn') return { ok: false, reason: 'No hand in progress.' };
+  if (bj.hands.length > 1) return { ok: false, reason: 'Already split this round.' };
+  const hand = bj.hands[bj.activeHand];
+  if (hand.cards.length !== 2) return { ok: false, reason: 'Can only split your first two cards.' };
+  if (cardValue(hand.cards[0].rank) !== cardValue(hand.cards[1].rank)) return { ok: false, reason: 'Cards must match to split.' };
+  if (hand.bet > character.chips) return { ok: false, reason: 'Not enough Chips to split.' };
+
+  character.chips -= hand.bet;
+  const [cardA, cardB] = hand.cards;
+  bj.hands = [
+    { cards: [cardA, drawCard()], bet: hand.bet, done: false },
+    { cards: [cardB, drawCard()], bet: hand.bet, done: false },
+  ];
+  bj.activeHand = 0;
+  return { ok: true, resolved: false, character };
+}
+
+function weightedSlotSymbol(symbols) {
+  const totalWeight = symbols.reduce((sum, s) => sum + s.weight, 0);
   let r = Math.random() * totalWeight;
-  for (const s of SLOT_SYMBOLS) {
+  for (const s of symbols) {
     if (r < s.weight) return s;
     r -= s.weight;
   }
-  return SLOT_SYMBOLS[0];
+  return symbols[0];
 }
 
-// Mirrors the client's doSlotSpin() exactly.
-function doSlotSpin(character, bet) {
-  if (!bet || bet < 1) return { ok: false, reason: 'Enter a valid bet.' };
+// Single spin function shared by all three machines -- reel count, min bet, symbol weights, and
+// match payouts all come from SLOT_MACHINES[machineKey]. A non-full match still refunds the bet
+// if the lowest-tier (highest-weight) symbol lands on at least half the reels, same consolation
+// idea as the original 3-reel "two cherries" rule, just scaled to more reels.
+function doSlotSpin(character, machineKey, bet) {
+  const machine = SLOT_MACHINES[machineKey];
+  if (!machine) return { ok: false, reason: 'Unknown slot machine.' };
+  if (!bet || bet < machine.minBet) return { ok: false, reason: `Minimum bet is ${machine.minBet}.` };
   if (bet > character.chips) return { ok: false, reason: 'Not enough Chips.' };
   character.chips -= bet;
 
-  const reels = [weightedSlotSymbol(), weightedSlotSymbol(), weightedSlotSymbol()];
+  const reels = Array.from({ length: machine.reelCount }, () => weightedSlotSymbol(machine.symbols));
 
   let payout = 0;
   let msg = '';
-  if (reels[0].symbol === reels[1].symbol && reels[1].symbol === reels[2].symbol) {
-    payout = bet * reels[0].three;
-    msg = `Triple ${reels[0].symbol}! +${payout} chips.`;
+  const allMatch = reels.every((s) => s.symbol === reels[0].symbol);
+  if (allMatch) {
+    payout = bet * reels[0].match;
+    msg = `${machine.reelCount}x ${reels[0].symbol}! +${payout} chips.`;
   } else {
-    const cherryCount = reels.filter((s) => s.symbol === SLOT_SYMBOLS[0].symbol).length;
-    if (cherryCount >= 2) {
+    const filler = machine.symbols[0];
+    const fillerCount = reels.filter((s) => s.symbol === filler.symbol).length;
+    const threshold = Math.max(2, Math.ceil(machine.reelCount / 2));
+    if (fillerCount >= threshold) {
       payout = bet;
-      msg = 'Two cherries — bet refunded.';
+      msg = `${fillerCount}x ${filler.symbol} — bet refunded.`;
     } else {
       msg = 'No match. Better luck next spin.';
     }
   }
 
-  character.chips += payout;
+  character.chips = round2(character.chips + payout);
   return {
     ok: true,
+    machine: machineKey,
     reels: reels.map((s) => s.symbol),
     message: `${msg} (bet ${bet})`,
     cls: payout > bet ? 'gain' : (payout === bet ? '' : 'loss'),
@@ -2684,6 +2790,8 @@ module.exports = {
   doBjDeal,
   doBjHit,
   doBjStand,
+  doBjDouble,
+  doBjSplit,
   doSlotSpin,
   drawCard,
   handTotal,

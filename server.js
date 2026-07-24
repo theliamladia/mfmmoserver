@@ -98,6 +98,8 @@ const {
   doBjDeal,
   doBjHit,
   doBjStand,
+  doBjDouble,
+  doBjSplit,
   doSlotSpin,
   drawCard,
   handTotal,
@@ -961,9 +963,11 @@ app.post('/casino/blackjack/deal', requireAuth, (req, res) => {
 });
 app.post('/casino/blackjack/hit', requireAuth, (req, res) => runAction(req, res, doBjHit));
 app.post('/casino/blackjack/stand', requireAuth, (req, res) => runAction(req, res, doBjStand));
+app.post('/casino/blackjack/double', requireAuth, (req, res) => runAction(req, res, doBjDouble));
+app.post('/casino/blackjack/split', requireAuth, (req, res) => runAction(req, res, doBjSplit));
 app.post('/casino/slots/spin', requireAuth, (req, res) => {
-  const { bet } = req.body || {};
-  runAction(req, res, doSlotSpin, bet);
+  const { machine, bet } = req.body || {};
+  runAction(req, res, doSlotSpin, machine, bet);
 });
 
 app.post('/bank/deposit', requireAuth, (req, res) => {
