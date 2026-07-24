@@ -37,6 +37,9 @@ const {
   getRecentInvestorChatMessages,
   getStockMarketState,
   setNextBotPostAt,
+  recordStockPricePoint,
+  getStockPriceHistory,
+  pruneOldStockPriceHistory,
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,
@@ -190,6 +193,7 @@ const {
   doSellStock,
   generateInvestorBotPost,
   randInt,
+  STOCK_SPREAD,
 } = require('./gameLogic');
 
 const app = express();
@@ -1723,14 +1727,48 @@ function ensureStocksTicked() {
     };
     if (advanceStockTicks(stock, now)) {
       updateStockPrice(stock.symbol, stock.price, stock.fairValue, stock.lastTickAt);
+      recordStockPricePoint(stock.symbol, stock.price, now);
     }
     return stock;
   });
 }
 
 function serializeStock(s) {
-  return { symbol: s.symbol, name: s.name, sector: s.sector, tier: s.tier, price: s.price };
+  return { symbol: s.symbol, name: s.name, sector: s.sector, tier: s.tier, price: s.price, spread: STOCK_SPREAD };
 }
+
+const STOCK_HISTORY_RANGE_MS = {
+  '1h': 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+  '1w': 7 * 24 * 60 * 60 * 1000,
+  '1m': 30 * 24 * 60 * 60 * 1000,
+};
+const STOCK_HISTORY_MAX_POINTS = 200;
+
+// Simple stride downsampling -- keeps the chart payload small regardless of range, while always
+// including the most recent point so the right edge of the chart matches the current price.
+function downsampleStockHistory(points, maxPoints) {
+  if (points.length <= maxPoints) return points;
+  const stride = Math.ceil(points.length / maxPoints);
+  const sampled = [];
+  for (let i = 0; i < points.length; i += stride) sampled.push(points[i]);
+  const last = points[points.length - 1];
+  if (sampled[sampled.length - 1] !== last) sampled.push(last);
+  return sampled;
+}
+
+app.get('/stocks/:symbol/history', requireAuth, (req, res) => {
+  const { symbol } = req.params;
+  const range = req.query.range || '1d';
+  const stocks = ensureStocksTicked();
+  const stock = stocks.find((s) => s.symbol === symbol);
+  if (!stock) return res.status(404).json({ ok: false, reason: 'Unknown stock.' });
+
+  const sinceTs = range === 'all' ? 0 : Date.now() - (STOCK_HISTORY_RANGE_MS[range] || STOCK_HISTORY_RANGE_MS['1d']);
+  const rows = getStockPriceHistory(symbol, sinceTs);
+  const points = downsampleStockHistory(rows.map((r) => ({ price: r.price, ts: r.recorded_at })), STOCK_HISTORY_MAX_POINTS);
+  res.json({ ok: true, symbol, range, points });
+});
 
 const BOT_POST_MIN_GAP_MS = 45 * 1000;
 const BOT_POST_MAX_GAP_MS = 90 * 1000;
@@ -1851,6 +1889,16 @@ function pruneTransactionLog() {
 }
 pruneTransactionLog();
 setInterval(pruneTransactionLog, TRANSACTION_PRUNE_INTERVAL_MS);
+
+// Same idea for the stock price history the sidebar chart reads -- nothing needs data older than
+// a month, and a tick every 32s adds up (~2,700 rows/ticker/day) if left unbounded.
+const STOCK_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+function pruneStockHistory() {
+  const removed = pruneOldStockPriceHistory(STOCK_HISTORY_RETENTION_MS);
+  if (removed > 0) console.log(`Pruned ${removed} stock price history row(s) older than 30 days.`);
+}
+pruneStockHistory();
+setInterval(pruneStockHistory, TRANSACTION_PRUNE_INTERVAL_MS);
 
 app.listen(PORT, () => {
   console.log(`mfmmoalpha-server listening on port ${PORT}`);

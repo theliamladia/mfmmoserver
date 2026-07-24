@@ -310,6 +310,32 @@ function setNextBotPostAt(ts) {
   db.prepare('UPDATE stock_market_state SET next_bot_post_at = ? WHERE id = 1').run(ts);
 }
 
+// Price history for the sidebar chart -- one row per ticker per tick that actually moved the
+// price (see recordStockPricePoint in server.js). Indexed for the range queries the chart uses.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    price REAL NOT NULL,
+    recorded_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_stock_price_history_symbol_time ON stock_price_history (symbol, recorded_at);
+`);
+
+function recordStockPricePoint(symbol, price, recordedAt) {
+  db.prepare('INSERT INTO stock_price_history (symbol, price, recorded_at) VALUES (?, ?, ?)').run(symbol, price, recordedAt);
+}
+
+function getStockPriceHistory(symbol, sinceTs) {
+  return db.prepare('SELECT price, recorded_at FROM stock_price_history WHERE symbol = ? AND recorded_at >= ? ORDER BY recorded_at ASC')
+    .all(symbol, sinceTs);
+}
+
+function pruneOldStockPriceHistory(maxAgeMs) {
+  const cutoff = Date.now() - maxAgeMs;
+  return db.prepare('DELETE FROM stock_price_history WHERE recorded_at < ?').run(cutoff).changes;
+}
+
 function createUser(username, passwordHash, character) {
   const stmt = db.prepare(
     'INSERT INTO users (username, password_hash, character_json, created_at, last_seen) VALUES (?, ?, ?, ?, ?)'
@@ -821,6 +847,9 @@ module.exports = {
   getRecentInvestorChatMessages,
   getStockMarketState,
   setNextBotPostAt,
+  recordStockPricePoint,
+  getStockPriceHistory,
+  pruneOldStockPriceHistory,
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,

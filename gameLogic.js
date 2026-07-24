@@ -3123,4 +3123,5 @@ module.exports = {
   generateInvestorBotPost,
   randInt,
   randFloat,
+  STOCK_SPREAD,
 };
