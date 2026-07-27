@@ -1203,6 +1203,18 @@ function doBuyGun(character, itemId, activeModifier) {
   };
 }
 
+// RED vs. BLUE Crate: cash + character.titles/inventory stay client-authoritative like every other
+// crate (see market.js), but the 1,000-per-crate global cap has to be enforced server-side since
+// it's shared across every player -- this only handles the cash side; the stock reservation itself
+// happens in server.js (db.trySpendCrateStock) before this runs.
+const RED_BLUE_CRATE_COST = 20000;
+function doSpinRedBlueCrate(character, qty) {
+  const totalCost = RED_BLUE_CRATE_COST * qty;
+  if (character.cash < totalCost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash -= totalCost;
+  return { ok: true, character };
+}
+
 // Mirrors the client's doBuyMelee() exactly -- no license needed.
 function doBuyMelee(character, itemId) {
   const item = MELEE_ITEMS_BY_ID[itemId];
@@ -3254,6 +3266,8 @@ module.exports = {
   doWork,
   doSlut,
   doCrime,
+  doSpinRedBlueCrate,
+  RED_BLUE_CRATE_COST,
   doWorkout,
   doSetSteroidTier,
   doRoidEscape,

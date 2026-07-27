@@ -106,6 +106,35 @@ function setServerMaintenance(on) {
   db.prepare('UPDATE server_state SET maintenance = ? WHERE id = 1').run(on ? 1 : 0);
 }
 
+// RED vs. BLUE Crate stock: globally limited to 1,000 openings each, shared across every player --
+// same bolt-on-column reasoning as the leaderboard/maintenance fields above.
+['red_crate_remaining', 'blue_crate_remaining'].forEach((col) => {
+  const has = db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === col);
+  if (!has) {
+    db.exec(`ALTER TABLE server_state ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 1000`);
+  }
+});
+
+function getCrateStock() {
+  return db.prepare('SELECT red_crate_remaining, blue_crate_remaining FROM server_state WHERE id = 1').get();
+}
+
+// Atomic reserve: the WHERE guard makes this a single conditional statement, so it's safe even if
+// two spins land in the same instant -- either both fit and both succeed, or the loser sees
+// changes === 0 and gets a "sold out" response instead of oversubscribing supply below zero.
+function trySpendCrateStock(crateKey, qty) {
+  const col = crateKey === 'red' ? 'red_crate_remaining' : 'blue_crate_remaining';
+  const result = db.prepare(`UPDATE server_state SET ${col} = ${col} - ? WHERE id = 1 AND ${col} >= ?`).run(qty, qty);
+  return result.changes > 0;
+}
+
+// Gives reserved stock back if the cash-deduction step that follows a successful reserve fails
+// (e.g. character.cash changed between the client's confirm and the request landing).
+function refundCrateStock(crateKey, qty) {
+  const col = crateKey === 'red' ? 'red_crate_remaining' : 'blue_crate_remaining';
+  db.prepare(`UPDATE server_state SET ${col} = ${col} + ? WHERE id = 1`).run(qty);
+}
+
 // Milos Trading Network: a real shared table (unlike everything else, which lives inside a single
 // user's character_json) since a listing must be visible to every player, not just its seller.
 db.exec(`
@@ -906,6 +935,9 @@ module.exports = {
   setServerPaused,
   setServerModifier,
   setServerMaintenance,
+  getCrateStock,
+  trySpendCrateStock,
+  refundCrateStock,
   createChatMessage,
   getRecentChatMessages,
   seedStocksIfEmpty,

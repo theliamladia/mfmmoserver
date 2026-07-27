@@ -28,6 +28,9 @@ const {
   setServerPaused,
   setServerModifier,
   setServerMaintenance,
+  getCrateStock,
+  trySpendCrateStock,
+  refundCrateStock,
   createChatMessage,
   getRecentChatMessages,
   seedStocksIfEmpty,
@@ -117,6 +120,8 @@ const {
   doBjDouble,
   doBjSplit,
   doSlotSpin,
+  doSpinRedBlueCrate,
+  RED_BLUE_CRATE_COST,
   drawCard,
   handTotal,
   isBlackjack,
@@ -1094,6 +1099,49 @@ function runAction(req, res, actionFn, ...args) {
   saveCharacter(user.id, character);
   res.json(result);
 }
+
+// RED vs. BLUE Crate: globally limited to 1,000 openings per side, so this can't reuse the generic
+// runAction() helper -- stock has to be reserved atomically BEFORE the cash check, then refunded if
+// the cash check fails (character.cash could've changed since the client's own last-known balance).
+app.get('/crates/redblue/stock', requireAuth, (req, res) => {
+  const stock = getCrateStock();
+  res.json({ ok: true, red: stock.red_crate_remaining, blue: stock.blue_crate_remaining, cost: RED_BLUE_CRATE_COST });
+});
+
+app.post('/crates/redblue/spin', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { crate, qty } = req.body || {};
+  const crateKey = crate === 'red' || crate === 'blue' ? crate : null;
+  if (!crateKey) return res.status(400).json({ ok: false, reason: 'Unknown crate.' });
+  const spinQty = Math.max(1, Math.min(10, Math.round(Number(qty) || 1)));
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  if (!trySpendCrateStock(crateKey, spinQty)) {
+    return res.status(409).json({ ok: false, reason: `Sold out! No ${crateKey.toUpperCase()} Crate supply remaining.` });
+  }
+
+  const cashBefore = character.cash;
+  const result = doSpinRedBlueCrate(character, spinQty);
+  if (!result.ok) {
+    refundCrateStock(crateKey, spinQty);
+    return res.status(429).json(result);
+  }
+
+  const delta = round2(character.cash - cashBefore);
+  if (delta !== 0) {
+    logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doSpinRedBlueCrate', delta, character.cash);
+  }
+  saveCharacter(user.id, character);
+
+  const stock = getCrateStock();
+  res.json({ ok: true, character, remaining: crateKey === 'red' ? stock.red_crate_remaining : stock.blue_crate_remaining });
+});
 
 app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork));
 app.post('/hustle/slut', requireAuth, (req, res) => runAction(req, res, doSlut, getRandomOtherUserCharacterName(req.user.sub)));
