@@ -339,6 +339,43 @@ function setNextBotPostAt(ts) {
   db.prepare('UPDATE stock_market_state SET next_bot_post_at = ? WHERE id = 1').run(ts);
 }
 
+// Level II Research feed cadence, bolted onto the same shared row -- same "just resumes from now"
+// reasoning as next_bot_post_at above.
+if (!db.prepare('PRAGMA table_info(stock_market_state)').all().some((c) => c.name === 'next_l2_post_at')) {
+  db.exec('ALTER TABLE stock_market_state ADD COLUMN next_l2_post_at INTEGER');
+}
+
+function setNextL2PostAt(ts) {
+  db.prepare('UPDATE stock_market_state SET next_l2_post_at = ? WHERE id = 1').run(ts);
+}
+
+// Level II Research feed: system-only posts (no player authorship) gating on a per-character
+// subscription flag, checked at the route level -- see /investors/l2/feed in server.js. A real
+// shared table (not per-character) since every subscriber reads the same reports about the same
+// shared stock prices.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS investor_l2_feed (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    pct REAL NOT NULL,
+    accurate INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    sent_at INTEGER NOT NULL
+  );
+`);
+
+const INVESTOR_L2_FEED_LIMIT = 100;
+
+function createL2FeedPost(symbol, direction, pct, accurate, message, sentAt) {
+  db.prepare('INSERT INTO investor_l2_feed (symbol, direction, pct, accurate, message, sent_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(symbol, direction, pct, accurate ? 1 : 0, message, sentAt);
+}
+
+function getRecentL2Feed() {
+  return db.prepare('SELECT * FROM investor_l2_feed ORDER BY id DESC LIMIT ?').all(INVESTOR_L2_FEED_LIMIT).reverse();
+}
+
 // Price history for the sidebar chart -- one row per ticker per tick that actually moved the
 // price (see recordStockPricePoint in server.js). Indexed for the range queries the chart uses.
 db.exec(`
@@ -947,6 +984,9 @@ module.exports = {
   getRecentInvestorChatMessages,
   getStockMarketState,
   setNextBotPostAt,
+  setNextL2PostAt,
+  createL2FeedPost,
+  getRecentL2Feed,
   recordStockPricePoint,
   getStockPriceHistory,
   pruneOldStockPriceHistory,

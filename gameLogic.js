@@ -3260,6 +3260,34 @@ function generateInvestorBotPost(stocks) {
   return { senderName, message, stockSymbol: stock.symbol, isReal, bullish };
 }
 
+// ---------- Level II Research feed ----------
+// A paid, read-only feed (see character.investorL2 client-side, and /investors/l2/feed in
+// server.js) reporting each stock's REAL price movement over the last posting interval -- unlike
+// the free InvestorsChat bot posts, which are banter/rumors that only sometimes move the price,
+// this is meant to read as "actual data" the player paid for. The 10% inaccurate roll is what
+// keeps it from being a strictly-better version of watching the chart yourself: it's usually right,
+// but a report can't be blindly trusted, matching the "sparse, not perfect" pitch in the ad.
+const INVESTOR_L2_INACCURATE_CHANCE = 0.1;
+
+// oldPrice is the price at (now - posting interval) for this stock, already looked up by the
+// caller (server.js has DB access for stock_price_history; this function stays a pure calculation
+// so it's testable/callable without a DB, matching generateInvestorBotPost's shape above).
+function generateL2Post(stock, oldPrice) {
+  const actualPct = oldPrice > 0 ? ((stock.price - oldPrice) / oldPrice) * 100 : 0;
+  const accurate = Math.random() >= INVESTOR_L2_INACCURATE_CHANCE;
+
+  // A fabricated report still needs to look like a real reading -- roll an independent plausible
+  // move (same rough magnitude a 5-minute report could show) rather than just flipping the sign,
+  // so it can occasionally land close to the truth by coincidence instead of always reading as an
+  // obvious inversion.
+  const reportedPct = accurate ? actualPct : randFloat(-4, 4);
+
+  const direction = reportedPct >= 0 ? 'up' : 'down';
+  const arrow = direction === 'up' ? '▲' : '▼';
+  const message = `${stock.symbol} ${arrow} ${Math.abs(reportedPct).toFixed(2)}% / 5min`;
+  return { symbol: stock.symbol, direction, pct: round2(reportedPct), accurate, message };
+}
+
 module.exports = {
   newCharacter,
   resetCharacterKeepCosmetics,
@@ -3422,6 +3450,8 @@ module.exports = {
   doBuyStock,
   doSellStock,
   generateInvestorBotPost,
+  generateL2Post,
+  pickRandom,
   randInt,
   randFloat,
   STOCK_SPREAD,

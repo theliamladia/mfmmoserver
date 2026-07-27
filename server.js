@@ -40,6 +40,9 @@ const {
   getRecentInvestorChatMessages,
   getStockMarketState,
   setNextBotPostAt,
+  setNextL2PostAt,
+  createL2FeedPost,
+  getRecentL2Feed,
   recordStockPricePoint,
   getStockPriceHistory,
   pruneOldStockPriceHistory,
@@ -208,6 +211,8 @@ const {
   doBuyStock,
   doSellStock,
   generateInvestorBotPost,
+  generateL2Post,
+  pickRandom,
   randInt,
   STOCK_SPREAD,
   BANK_TIERS,
@@ -2067,6 +2072,45 @@ function maybeSpawnInvestorBotPost(stocks) {
 
   setNextBotPostAt(now + randInt(BOT_POST_MIN_GAP_MS, BOT_POST_MAX_GAP_MS));
 }
+
+// ---------- Level II Research feed ----------
+const INVESTOR_L2_POST_INTERVAL_MS = 5 * 60 * 1000;
+
+// Same "fires at most one post per call, once due" shape as maybeSpawnInvestorBotPost above, but
+// on a fixed 5-minute cadence and reporting the picked stock's REAL price move over that window
+// (see generateL2Post in gameLogic.js for the accurate/inaccurate roll) rather than banter.
+function maybeSpawnL2Post(stocks) {
+  const state = getStockMarketState();
+  const now = Date.now();
+  if (state.next_l2_post_at && now < state.next_l2_post_at) return;
+  if (!stocks.length) return;
+
+  const stock = pickRandom(stocks);
+  const history = getStockPriceHistory(stock.symbol, now - INVESTOR_L2_POST_INTERVAL_MS);
+  const oldPrice = history.length ? history[0].price : stock.price;
+  const post = generateL2Post(stock, oldPrice);
+  createL2FeedPost(post.symbol, post.direction, post.pct, post.accurate, post.message, now);
+
+  setNextL2PostAt(now + INVESTOR_L2_POST_INTERVAL_MS);
+}
+
+function serializeL2Post(row) {
+  return { id: row.id, symbol: row.symbol, direction: row.direction, pct: row.pct, message: row.message, sentAt: row.sent_at };
+}
+
+app.get('/investors/l2/feed', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+
+  if (!character.investorL2 || !character.investorL2.active) {
+    return res.json({ ok: true, subscribed: false, posts: [] });
+  }
+
+  const stocks = ensureStocksTicked();
+  maybeSpawnL2Post(stocks);
+  res.json({ ok: true, subscribed: true, posts: getRecentL2Feed().map(serializeL2Post) });
+});
 
 app.get('/stocks', requireAuth, (req, res) => {
   const stocks = ensureStocksTicked();
