@@ -473,6 +473,7 @@ function newCharacter(firstName, lastName) {
     maxxPurchased: [],
     blackjack: { phase: 'betting', playerCards: [], dealerCards: [], bet: 0 },
     combat: { active: false, enemyKey: null, enemyHp: 0, enemyMaxHp: 0, playerHp: 0, playerMaxHp: 0, turn: null, guarding: false },
+    profile: { bannerTitleId: null, showcaseTitleIds: [], status: '', wall: [] },
   };
 }
 
@@ -2853,6 +2854,98 @@ function altcoinFullBuyoutPayout(coin, holdings) {
   }));
 }
 
+// ---------- Player Profiles ----------
+const PROFILE_SHOWCASE_MAX = 4;
+const PROFILE_STATUS_MAX_LEN = 100;
+const PROFILE_WALL_POST_MAX_LEN = 300;
+const PROFILE_WALL_PAGE_SIZE = 5;
+
+function ensureProfileState(character) {
+  if (!character.profile) character.profile = { bannerTitleId: null, showcaseTitleIds: [], status: '', wall: [] };
+  if (character.profile.bannerTitleId === undefined) character.profile.bannerTitleId = null;
+  if (!character.profile.showcaseTitleIds) character.profile.showcaseTitleIds = [];
+  if (typeof character.profile.status !== 'string') character.profile.status = '';
+  if (!character.profile.wall) character.profile.wall = [];
+  return character.profile;
+}
+
+// Titles are opaque, client-trusted ids everywhere else in this codebase (see the comment above
+// the inventory catalogs) -- this mirrors that same trust level, just checking that the caller
+// actually owns *some* stack/flag with this id rather than validating what the title even is.
+function characterOwnsTitle(character, titleId) {
+  if ((character.titles.owned || []).includes(titleId)) return true;
+  if ((character.titles.customTitles || []).some((t) => t.id === titleId)) return true;
+  return (character.inventory || []).some((s) => s.id === titleId && s.qty > 0);
+}
+
+function doSetProfileStatus(character, status) {
+  const profile = ensureProfileState(character);
+  const trimmed = String(status || '').trim().slice(0, PROFILE_STATUS_MAX_LEN);
+  profile.status = trimmed;
+  return { ok: true, message: 'Status updated.', cls: 'gain', character };
+}
+
+function doSetProfileBanner(character, titleId) {
+  const profile = ensureProfileState(character);
+  if (!titleId) {
+    profile.bannerTitleId = null;
+    return { ok: true, message: 'Banner reset to your equipped title.', cls: 'gain', character };
+  }
+  if (!characterOwnsTitle(character, titleId)) return { ok: false, reason: "You don't own that title." };
+  profile.bannerTitleId = titleId;
+  return { ok: true, message: 'Profile banner updated.', cls: 'gain', character };
+}
+
+function doAddShowcaseTitle(character, titleId) {
+  const profile = ensureProfileState(character);
+  if (!titleId) return { ok: false, reason: 'Unknown title.' };
+  if (!characterOwnsTitle(character, titleId)) return { ok: false, reason: "You don't own that title." };
+  if (profile.showcaseTitleIds.includes(titleId)) return { ok: false, reason: 'Already in your showcase.' };
+  if (profile.showcaseTitleIds.length >= PROFILE_SHOWCASE_MAX) {
+    return { ok: false, reason: `Showcase is full (max ${PROFILE_SHOWCASE_MAX}) -- remove one first.` };
+  }
+  profile.showcaseTitleIds.push(titleId);
+  return { ok: true, message: 'Added to Title Showcase.', cls: 'gain', character };
+}
+
+function doRemoveShowcaseTitle(character, titleId) {
+  const profile = ensureProfileState(character);
+  profile.showcaseTitleIds = profile.showcaseTitleIds.filter((id) => id !== titleId);
+  return { ok: true, message: 'Removed from Title Showcase.', cls: '', character };
+}
+
+// Wall posts live on the PROFILE OWNER's own save (like custom titles) -- unlike everything else
+// in gameLogic.js, doPostToWall/doDeleteWallPost each act on a character that may not belong to
+// the caller, so they don't fit the runAction(character-of-req.user) shape and are wired directly
+// in server.js the same way /players/pay handles a separate payer/target pair.
+function doPostToWall(targetCharacter, authorUsername, authorName, text) {
+  const profile = ensureProfileState(targetCharacter);
+  const trimmed = String(text || '').trim().slice(0, PROFILE_WALL_POST_MAX_LEN);
+  if (!trimmed) return { ok: false, reason: 'Write something first.' };
+  profile.wall.push({
+    id: `wall_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+    authorUsername,
+    authorName,
+    text: trimmed,
+    ts: Date.now(),
+  });
+  return { ok: true };
+}
+
+function doDeleteWallPost(targetCharacter, postId) {
+  const profile = ensureProfileState(targetCharacter);
+  profile.wall = profile.wall.filter((p) => p.id !== postId);
+}
+
+// Newest-first, paginated -- returns the requested page plus the total page count.
+function paginateWall(profile, page) {
+  const sorted = [...profile.wall].reverse();
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PROFILE_WALL_PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+  const start = (safePage - 1) * PROFILE_WALL_PAGE_SIZE;
+  return { wallPage: sorted.slice(start, start + PROFILE_WALL_PAGE_SIZE), wallTotalPages: totalPages, wallPageNum: safePage };
+}
+
 // ---------- Leaderboard (Looks / Net Worth / Level) ----------
 // Title ids must match the client's title catalog (core.js) exactly -- these are the only
 // server-known title ids, since granting/revoking them is the one case where the server needs to
@@ -3259,6 +3352,18 @@ module.exports = {
   creditSellerForSale,
   LEADERBOARD_TITLES,
   LEADERBOARD_CATEGORIES,
+  ensureProfileState,
+  characterOwnsTitle,
+  doSetProfileStatus,
+  doSetProfileBanner,
+  doAddShowcaseTitle,
+  doRemoveShowcaseTitle,
+  doPostToWall,
+  doDeleteWallPost,
+  paginateWall,
+  PROFILE_SHOWCASE_MAX,
+  PROFILE_STATUS_MAX_LEN,
+  PROFILE_WALL_POST_MAX_LEN,
   computeCharacterLevel,
   looksTrainMult,
   computeNetWorth,

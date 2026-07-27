@@ -206,6 +206,15 @@ const {
   randInt,
   STOCK_SPREAD,
   BANK_TIERS,
+  ensureProfileState,
+  doSetProfileStatus,
+  doSetProfileBanner,
+  doAddShowcaseTitle,
+  doRemoveShowcaseTitle,
+  doPostToWall,
+  doDeleteWallPost,
+  paginateWall,
+  computeCharacterLevel,
 } = require('./gameLogic');
 
 const app = express();
@@ -392,6 +401,86 @@ app.get('/players/online', requireAuth, (req, res) => {
   const pendingMarriageProposal = pendingMarriage ? { id: pendingMarriage.id, proposerName: pendingMarriage.proposer_name } : null;
 
   res.json({ ok: true, players, pendingDuelChallenge, pendingMarriageProposal });
+});
+
+// ---------- Player Profiles ----------
+// Sends the target's whole character (same "send the full blob, let the client resolve titles/
+// display" approach as /players/online above) rather than pre-resolving title defs server-side --
+// the titles catalog only exists in client JS. Viewable by anyone logged in, online or not.
+app.get('/profile/:username', requireAuth, (req, res) => {
+  const target = getUserByUsername(req.params.username);
+  if (!target) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  const character = JSON.parse(target.character_json);
+  const profile = ensureProfileState(character);
+  const { wallPage, wallTotalPages, wallPageNum } = paginateWall(profile, Number(req.query.page) || 1);
+  res.json({
+    ok: true,
+    username: target.username,
+    character,
+    level: computeCharacterLevel(character),
+    isOwner: target.id === req.user.sub,
+    wallPage,
+    wallTotalPages,
+    wallPageNum,
+  });
+});
+
+app.post('/profile/status', requireAuth, (req, res) => {
+  const { status } = req.body || {};
+  runAction(req, res, doSetProfileStatus, status);
+});
+
+app.post('/profile/banner', requireAuth, (req, res) => {
+  const { titleId } = req.body || {};
+  runAction(req, res, doSetProfileBanner, titleId);
+});
+
+app.post('/profile/showcase/add', requireAuth, (req, res) => {
+  const { titleId } = req.body || {};
+  runAction(req, res, doAddShowcaseTitle, titleId);
+});
+
+app.post('/profile/showcase/remove', requireAuth, (req, res) => {
+  const { titleId } = req.body || {};
+  runAction(req, res, doRemoveShowcaseTitle, titleId);
+});
+
+// Wall posts mutate the TARGET's save, not the caller's -- same two-character shape as
+// /players/pay above, so this doesn't go through runAction (which always loads req.user's own
+// character). Returns the target's fresh wall page, never the caller's own `character`.
+app.post('/profile/wall/post', requireAuth, (req, res) => {
+  const { targetUsername, text } = req.body || {};
+  const target = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!target) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+
+  const author = getUserById(req.user.sub);
+  if (!author) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const authorCharacter = JSON.parse(author.character_json);
+
+  const targetCharacter = JSON.parse(target.character_json);
+  const result = doPostToWall(targetCharacter, author.username, `${authorCharacter.firstName} ${authorCharacter.lastName}`, text);
+  if (!result.ok) return res.status(429).json(result);
+  saveCharacter(target.id, targetCharacter);
+
+  const profile = ensureProfileState(targetCharacter);
+  const { wallPage, wallTotalPages, wallPageNum } = paginateWall(profile, 1);
+  res.json({ ok: true, message: 'Posted.', wallPage, wallTotalPages, wallPageNum });
+});
+
+app.post('/profile/wall/delete', requireAuth, (req, res) => {
+  const { targetUsername, postId, page } = req.body || {};
+  if (targetUsername !== req.user.username) {
+    return res.status(403).json({ ok: false, reason: 'You can only delete posts on your own wall.' });
+  }
+  const target = getUserByUsername(targetUsername);
+  if (!target) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  const targetCharacter = JSON.parse(target.character_json);
+  doDeleteWallPost(targetCharacter, postId);
+  saveCharacter(target.id, targetCharacter);
+
+  const profile = ensureProfileState(targetCharacter);
+  const { wallPage, wallTotalPages, wallPageNum } = paginateWall(profile, Number(page) || 1);
+  res.json({ ok: true, message: 'Deleted.', wallPage, wallTotalPages, wallPageNum });
 });
 
 // New Milos City presence. Separate from last_seen (which just means "the app is open,
