@@ -2860,12 +2860,18 @@ const PROFILE_STATUS_MAX_LEN = 100;
 const PROFILE_WALL_POST_MAX_LEN = 300;
 const PROFILE_WALL_PAGE_SIZE = 5;
 
+const PROFILE_PRIVACY_FIELDS = ['cash', 'fc', 'portfolio'];
+
 function ensureProfileState(character) {
   if (!character.profile) character.profile = { bannerTitleId: null, showcaseTitleIds: [], status: '', wall: [] };
   if (character.profile.bannerTitleId === undefined) character.profile.bannerTitleId = null;
   if (!character.profile.showcaseTitleIds) character.profile.showcaseTitleIds = [];
   if (typeof character.profile.status !== 'string') character.profile.status = '';
   if (!character.profile.wall) character.profile.wall = [];
+  if (!character.profile.privacy) character.profile.privacy = { cash: false, fc: false, portfolio: false };
+  PROFILE_PRIVACY_FIELDS.forEach((f) => {
+    if (typeof character.profile.privacy[f] !== 'boolean') character.profile.privacy[f] = false;
+  });
   return character.profile;
 }
 
@@ -2883,6 +2889,18 @@ function doSetProfileStatus(character, status) {
   const trimmed = String(status || '').trim().slice(0, PROFILE_STATUS_MAX_LEN);
   profile.status = trimmed;
   return { ok: true, message: 'Status updated.', cls: 'gain', character };
+}
+
+function doToggleProfilePrivacy(character, field) {
+  const profile = ensureProfileState(character);
+  if (!PROFILE_PRIVACY_FIELDS.includes(field)) return { ok: false, reason: 'Unknown field.' };
+  profile.privacy[field] = !profile.privacy[field];
+  return {
+    ok: true,
+    message: `${field} is now ${profile.privacy[field] ? 'private' : 'public'} on your profile.`,
+    cls: 'gain',
+    character,
+  };
 }
 
 function doSetProfileBanner(character, titleId) {
@@ -3356,6 +3374,7 @@ module.exports = {
   characterOwnsTitle,
   doSetProfileStatus,
   doSetProfileBanner,
+  doToggleProfilePrivacy,
   doAddShowcaseTitle,
   doRemoveShowcaseTitle,
   doPostToWall,

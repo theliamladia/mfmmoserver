@@ -209,6 +209,7 @@ const {
   ensureProfileState,
   doSetProfileStatus,
   doSetProfileBanner,
+  doToggleProfilePrivacy,
   doAddShowcaseTitle,
   doRemoveShowcaseTitle,
   doPostToWall,
@@ -413,12 +414,22 @@ app.get('/profile/:username', requireAuth, (req, res) => {
   const character = JSON.parse(target.character_json);
   const profile = ensureProfileState(character);
   const { wallPage, wallTotalPages, wallPageNum } = paginateWall(profile, Number(req.query.page) || 1);
+  const isOwner = target.id === req.user.sub;
+
+  // Privacy toggles only actually hide anything from someone ELSE viewing this profile -- the
+  // owner always sees their own real numbers (and needs to, to toggle the eye icon sensibly).
+  if (!isOwner) {
+    if (profile.privacy.cash) character.cash = null;
+    if (profile.privacy.fc && character.crypto) character.crypto = { ...character.crypto, fc: null };
+    if (profile.privacy.portfolio) character.stocks = { holdings: {} };
+  }
+
   res.json({
     ok: true,
     username: target.username,
     character,
     level: computeCharacterLevel(character),
-    isOwner: target.id === req.user.sub,
+    isOwner,
     wallPage,
     wallTotalPages,
     wallPageNum,
@@ -428,6 +439,11 @@ app.get('/profile/:username', requireAuth, (req, res) => {
 app.post('/profile/status', requireAuth, (req, res) => {
   const { status } = req.body || {};
   runAction(req, res, doSetProfileStatus, status);
+});
+
+app.post('/profile/privacy/toggle', requireAuth, (req, res) => {
+  const { field } = req.body || {};
+  runAction(req, res, doToggleProfilePrivacy, field);
 });
 
 app.post('/profile/banner', requireAuth, (req, res) => {
