@@ -796,6 +796,61 @@ function getReportsPage(page, pageSize, typeFilter) {
   return { rows, total };
 }
 
+// Bolt-on resolved-tracking columns -- reports predate this feature, same pattern as every other
+// "add a column to an existing table" migration in this file.
+['resolved', 'resolved_comment', 'resolved_at'].forEach((col) => {
+  const has = db.prepare('PRAGMA table_info(reports)').all().some((c) => c.name === col);
+  if (!has) {
+    const type = col === 'resolved' ? 'INTEGER NOT NULL DEFAULT 0' : col === 'resolved_at' ? 'INTEGER' : 'TEXT';
+    db.exec(`ALTER TABLE reports ADD COLUMN ${col} ${type}`);
+  }
+});
+
+function getReportById(id) {
+  return db.prepare('SELECT * FROM reports WHERE id = ?').get(id);
+}
+
+function resolveReport(id, comment, resolvedAt) {
+  db.prepare('UPDATE reports SET resolved = 1, resolved_comment = ?, resolved_at = ? WHERE id = ?').run(comment, resolvedAt, id);
+}
+
+// Report-resolved notifications: same shape as payment_notifications -- the reporter needs to
+// learn their report was resolved even though they weren't the one making this request (the admin
+// was), and the header bell polls this globally, independent of which page the reporter is on.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS report_resolved_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_user_id INTEGER NOT NULL,
+    report_type TEXT NOT NULL,
+    comment TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0
+  );
+`);
+const REPORT_RESOLVED_NOTIFICATION_LIMIT = 20;
+
+function createReportResolvedNotification(recipientUserId, reportType, comment) {
+  db.prepare(
+    'INSERT INTO report_resolved_notifications (recipient_user_id, report_type, comment, created_at, seen) VALUES (?, ?, ?, ?, 0)'
+  ).run(recipientUserId, reportType, comment, Date.now());
+}
+
+function getReportResolvedNotifications(userId) {
+  return db
+    .prepare('SELECT * FROM report_resolved_notifications WHERE recipient_user_id = ? ORDER BY created_at DESC LIMIT ?')
+    .all(userId, REPORT_RESOLVED_NOTIFICATION_LIMIT);
+}
+
+function getUnseenReportResolvedCount(userId) {
+  return db
+    .prepare('SELECT COUNT(*) AS c FROM report_resolved_notifications WHERE recipient_user_id = ? AND seen = 0')
+    .get(userId).c;
+}
+
+function markReportResolvedNotificationsSeen(userId) {
+  db.prepare('UPDATE report_resolved_notifications SET seen = 1 WHERE recipient_user_id = ? AND seen = 0').run(userId);
+}
+
 // Robbery notifications: same reasoning as payment_notifications -- the victim needs to learn
 // they were robbed even though they never triggered the request. Unlike payments (a quiet bell
 // badge), robberies pop an alert modal client-side, so the client fetches unseen rows directly
@@ -1020,6 +1075,12 @@ module.exports = {
   markMtnSaleNotificationsSeen,
   createReport,
   getReportsPage,
+  getReportById,
+  resolveReport,
+  createReportResolvedNotification,
+  getReportResolvedNotifications,
+  getUnseenReportResolvedCount,
+  markReportResolvedNotificationsSeen,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,

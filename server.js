@@ -76,6 +76,12 @@ const {
   markMtnSaleNotificationsSeen,
   createReport,
   getReportsPage,
+  getReportById,
+  resolveReport,
+  createReportResolvedNotification,
+  getReportResolvedNotifications,
+  getUnseenReportResolvedCount,
+  markReportResolvedNotificationsSeen,
   createRobberyNotification,
   getUnseenRobberyNotifications,
   markRobberyNotificationsSeen,
@@ -1807,7 +1813,16 @@ app.post('/reports/submit', requireAuth, (req, res) => {
 });
 
 function serializeReport(row) {
-  return { id: row.id, username: row.username, type: row.type, message: row.message, createdAt: row.created_at };
+  return {
+    id: row.id,
+    username: row.username,
+    type: row.type,
+    message: row.message,
+    createdAt: row.created_at,
+    resolved: !!row.resolved,
+    resolvedComment: row.resolved_comment,
+    resolvedAt: row.resolved_at,
+  };
 }
 
 app.get('/reports/list', requireAuth, requireAdminPassword, (req, res) => {
@@ -1815,6 +1830,45 @@ app.get('/reports/list', requireAuth, requireAdminPassword, (req, res) => {
   const typeFilter = REPORT_TYPES.includes(req.query.type) ? req.query.type : null;
   const { rows, total } = getReportsPage(page, REPORT_PAGE_SIZE, typeFilter);
   res.json({ ok: true, reports: rows.map(serializeReport), total, page, pageSize: REPORT_PAGE_SIZE });
+});
+
+const REPORT_RESOLVE_COMMENT_MAX_LEN = 1000;
+
+app.post('/reports/:id/resolve', requireAuth, requireAdminPassword, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const comment = (req.body?.comment || '').trim();
+  if (!id) return res.status(400).json({ ok: false, reason: 'Unknown report.' });
+  if (!comment) return res.status(400).json({ ok: false, reason: 'Enter a comment for the reporter.' });
+
+  const report = getReportById(id);
+  if (!report) return res.status(404).json({ ok: false, reason: 'Report not found.' });
+  if (report.resolved) return res.status(409).json({ ok: false, reason: 'Already resolved.' });
+
+  const trimmedComment = comment.slice(0, REPORT_RESOLVE_COMMENT_MAX_LEN);
+  resolveReport(id, trimmedComment, Date.now());
+  createReportResolvedNotification(report.user_id, report.type, trimmedComment);
+  res.json({ ok: true, report: serializeReport(getReportById(id)) });
+});
+
+function serializeReportResolvedNotification(row) {
+  return { id: row.id, reportType: row.report_type, comment: row.comment, createdAt: row.created_at, seen: !!row.seen };
+}
+
+app.get('/notifications/report-resolved', requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    notifications: getReportResolvedNotifications(req.user.sub).map(serializeReportResolvedNotification),
+    unseenCount: getUnseenReportResolvedCount(req.user.sub),
+  });
+});
+
+app.post('/notifications/report-resolved/seen', requireAuth, (req, res) => {
+  markReportResolvedNotificationsSeen(req.user.sub);
+  res.json({
+    ok: true,
+    notifications: getReportResolvedNotifications(req.user.sub).map(serializeReportResolvedNotification),
+    unseenCount: getUnseenReportResolvedCount(req.user.sub),
+  });
 });
 
 // Maintenance mode blocks every server-authoritative action (and the trust-based sync) for
