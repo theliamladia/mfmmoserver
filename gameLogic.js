@@ -2321,7 +2321,7 @@ const FARM_SEED_COST_BY_DRUG = { drugWeed: 150, drugCoke: 1200 };
 const FARM_GROW_MS = 60 * 60 * 1000;
 const FARM_PACKAGE_MS = 5 * 60 * 1000;
 const FARM_SHIP_MS = 60 * 60 * 1000;
-const FARM_PAYOUT_MULT = 10; // confirmed final, bumped up from an original 5x during design review
+const FARM_MAX_QTY = 4; // packages planted per grow cycle -- seed cost and harvest yield both scale with it
 const FARM_CONFISCATION_BASE = 0.30;
 const FARM_CONFISCATION_FLOOR = 0.05;
 const FARM_SECURITY_MAX_TIER = 5; // each tier -5%, hits the floor at tier 5
@@ -2359,11 +2359,6 @@ function advanceFarmPlot(plot) {
   return plot;
 }
 
-function farmPlotPayout(plot) {
-  const drug = DRUG_ITEMS_BY_ID[plot.drugType];
-  return round2(((drug.sellMin + drug.sellMax) / 2) * FARM_PAYOUT_MULT);
-}
-
 function doBuyFarmPlot(character) {
   const farms = ensureFarmsState(character);
   if ((character.drugDealer.unitsSold || 0) < FARM_UNLOCK_UNITS_SOLD) {
@@ -2375,6 +2370,7 @@ function doBuyFarmPlot(character) {
   farms.plots.push({
     id: `plot_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
     drugType: null,
+    qty: 0,
     prepped: false,
     stage: 'empty',
     stageReadyAt: 0,
@@ -2399,17 +2395,22 @@ function doPrepFarmPlot(character, plotId) {
   return { ok: true, message: `Tilled, watered, and fertilized for $${FARM_PREP_COST.toLocaleString()}.`, cls: 'gain', character };
 }
 
-function doPlantFarmSeed(character, plotId, drugId) {
+function doPlantFarmSeed(character, plotId, drugId, qty) {
   const plot = findFarmPlot(character, plotId);
   if (!plot) return { ok: false, reason: 'Unknown plot.' };
   advanceFarmPlot(plot);
   if (plot.stage !== 'empty') return { ok: false, reason: 'This plot is already in a grow cycle.' };
   if (!plot.prepped) return { ok: false, reason: 'Till, water, and fertilize this plot first.' };
-  const seedCost = FARM_SEED_COST_BY_DRUG[drugId];
-  if (!seedCost) return { ok: false, reason: 'Unknown seed type.' };
+  const perSeedCost = FARM_SEED_COST_BY_DRUG[drugId];
+  if (!perSeedCost) return { ok: false, reason: 'Unknown seed type.' };
+  const plantQty = Math.floor(Number(qty));
+  if (!Number.isInteger(plantQty) || plantQty < 1 || plantQty > FARM_MAX_QTY) {
+    return { ok: false, reason: `Choose 1-${FARM_MAX_QTY} packages to plant.` };
+  }
   if (drugId === 'drugCoke' && (character.drugDealer.unitsSold || 0) < DEALER_TIERS_BY_ID.dmitri.unlockUnits) {
     return { ok: false, reason: 'Cocaine seeds unlock once Dmitri does.' };
   }
+  const seedCost = round2(perSeedCost * plantQty);
   if (character.cash < seedCost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash = round2(character.cash - seedCost);
 
@@ -2418,6 +2419,7 @@ function doPlantFarmSeed(character, plotId, drugId) {
   const confiscated = Math.random() < chance;
 
   plot.drugType = drugId;
+  plot.qty = plantQty;
   plot.prepped = false;
   plot.stage = 'growing';
   plot.stageReadyAt = Date.now() + FARM_GROW_MS;
@@ -2426,7 +2428,12 @@ function doPlantFarmSeed(character, plotId, drugId) {
   const riskNote = confiscated
     ? `Bad news: this run's already busted (${Math.round(chance * 100)}% odds) -- it'll still take the full cycle, but the harvest is a write-off.`
     : `Risk rolled and cleared (${Math.round(chance * 100)}% odds) -- this run is safe from confiscation.`;
-  return { ok: true, message: `Planted ${DRUG_ITEMS_BY_ID[drugId].name} seed. ${riskNote}`, cls: confiscated ? 'loss' : 'gain', character };
+  return {
+    ok: true,
+    message: `Planted ${plantQty}x ${DRUG_ITEMS_BY_ID[drugId].name} seed${plantQty > 1 ? 's' : ''}. ${riskNote}`,
+    cls: confiscated ? 'loss' : 'gain',
+    character,
+  };
 }
 
 function doCollectFarmHarvest(character, plotId) {
@@ -2439,15 +2446,15 @@ function doCollectFarmHarvest(character, plotId) {
   let message;
   let cls;
   if (plot.confiscated) {
-    message = `Confiscated: your ${drugName} shipment was seized. No payout.`;
+    message = `Confiscated: your ${drugName} shipment was seized. No packages.`;
     cls = 'loss';
   } else {
-    const payout = farmPlotPayout(plot);
-    character.cash = round2(character.cash + payout);
-    message = `Shipment landed! Sold ${drugName} for $${payout.toFixed(2)} (10x street rate).`;
+    addToInventory(character, plot.drugType, plot.qty);
+    message = `Shipment landed! ${plot.qty}x ${drugName} package${plot.qty > 1 ? 's' : ''} added to your Inventory.`;
     cls = 'gain';
   }
   plot.drugType = null;
+  plot.qty = 0;
   plot.prepped = false;
   plot.stage = 'empty';
   plot.stageReadyAt = 0;
@@ -2489,11 +2496,11 @@ function tryInterceptFarmShipment(attacker, target) {
   if (plot.confiscated) {
     note = `You tracked their shipment location, but it was already busted -- nothing to take.`;
   } else {
-    const payout = farmPlotPayout(plot);
-    attacker.cash = round2(attacker.cash + payout);
-    note = `You also tracked down their in-transit ${drugName} shipment and intercepted it for $${payout.toFixed(2)}!`;
+    addToInventory(attacker, plot.drugType, plot.qty);
+    note = `You also tracked down their in-transit ${drugName} shipment and intercepted ${plot.qty}x package${plot.qty > 1 ? 's' : ''}!`;
   }
   plot.drugType = null;
+  plot.qty = 0;
   plot.prepped = false;
   plot.stage = 'empty';
   plot.stageReadyAt = 0;
@@ -3178,6 +3185,7 @@ module.exports = {
   FARM_PREP_COST,
   FARM_SEED_COST_BY_DRUG,
   FARM_SECURITY_MAX_TIER,
+  FARM_MAX_QTY,
   farmConfiscationChance,
   ensureCryptoState,
   doBuyCryptoUpgrade,

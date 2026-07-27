@@ -1082,8 +1082,8 @@ app.post('/farms/plot/prep', requireAuth, (req, res) => {
   runAction(req, res, doPrepFarmPlot, plotId);
 });
 app.post('/farms/plot/plant', requireAuth, (req, res) => {
-  const { plotId, drugId } = req.body || {};
-  runAction(req, res, doPlantFarmSeed, plotId, drugId);
+  const { plotId, drugId, qty } = req.body || {};
+  runAction(req, res, doPlantFarmSeed, plotId, drugId, qty);
 });
 app.post('/farms/plot/collect', requireAuth, (req, res) => {
   const { plotId } = req.body || {};
