@@ -1217,7 +1217,13 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   const usedIndexes = new Set(active.map((s) => s.slot_index));
   const slotIndex = [0, 1, 2, 3].find((i) => !usedIndexes.has(i));
   const now = Date.now();
-  const readyAt = now + tierDef.ms;
+  // Testing/demo override for the admin account only -- full tier price still applies, only the
+  // wait is shortened, so the reveal flow can be exercised on production without a real multi-day
+  // wait. ADMIN_USERNAME is declared later in this file but already initialized by the time any
+  // request handler actually runs (full module load completes before the server accepts traffic).
+  const isAdminTester = (req.user?.username || '').toLowerCase() === ADMIN_USERNAME;
+  const durationMs = isAdminTester ? 5000 : tierDef.ms;
+  const readyAt = now + durationMs;
   const rowId = createNmgSlot(user.id, slotIndex, stackId, tier, tierDef.cost, now, readyAt);
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgSubmit', round2(character.cash - cashBefore), character.cash);
