@@ -24,6 +24,11 @@ const {
   addPenitentiaryCommissary,
   getAllPenitentiaryRecords,
   getPenitentiaryRecordById,
+  getActiveNmgSlots,
+  getNmgSlotById,
+  createNmgSlot,
+  revealNmgSlot,
+  deleteNmgSlot,
   getServerState,
   setServerPaused,
   setServerModifier,
@@ -185,6 +190,14 @@ const {
   creditSellerForSale,
   round2,
   round4,
+  addToInventory,
+  removeFromInventory,
+  inventoryQty,
+  NMG_MAX_SLOTS,
+  NMG_TIERS,
+  NMG_ELIGIBLE_BASE_TITLE_IDS,
+  nmgBaseIdOf,
+  rollNmgGrade,
   LEADERBOARD_TITLES,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
@@ -1152,6 +1165,89 @@ app.post('/crates/redblue/spin', requireAuth, (req, res) => {
 
   const stock = getCrateStock();
   res.json({ ok: true, character, remaining: crateKey === 'red' ? stock.red_crate_remaining : stock.blue_crate_remaining });
+});
+
+// New Milos Grading (NMG): submit/reveal can't reuse the generic runAction() helper -- both need
+// direct nmg_slots row work interleaved with the character mutation, same reason the RED/BLUE
+// crate routes above bypass it. Slot state deliberately lives in its own table, never inside
+// character_json (see the nmg_slots table comment in db.js) -- character_json's only sync path,
+// POST /character/sync, applies zero field validation, so a ready_at timestamp stored there would
+// be trivially spoofable and would make the paid turnaround tiers meaningless.
+app.get('/nmg/state', requireAuth, (req, res) => {
+  const slots = getActiveNmgSlots(req.user.sub);
+  res.json({
+    ok: true,
+    slots: slots.map((s) => ({
+      id: s.id,
+      slotIndex: s.slot_index,
+      titleId: s.title_id,
+      tier: s.tier,
+      submittedAt: s.submitted_at,
+      readyAt: s.ready_at,
+      ready: Date.now() >= s.ready_at,
+    })),
+  });
+});
+
+app.post('/nmg/submit', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { stackId, tier } = req.body || {};
+  const tierDef = NMG_TIERS[tier];
+  if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  const active = getActiveNmgSlots(user.id);
+  if (active.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: 'All 4 grading slots are full.' });
+
+  const baseId = nmgBaseIdOf(stackId);
+  if (!NMG_ELIGIBLE_BASE_TITLE_IDS.has(baseId)) return res.status(400).json({ ok: false, reason: 'This title cannot be graded.' });
+  if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that title." });
+  if (character.cash < tierDef.cost) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  const cashBefore = character.cash;
+  character.cash = round2(character.cash - tierDef.cost);
+  removeFromInventory(character, stackId, 1);
+
+  const usedIndexes = new Set(active.map((s) => s.slot_index));
+  const slotIndex = [0, 1, 2, 3].find((i) => !usedIndexes.has(i));
+  const now = Date.now();
+  const readyAt = now + tierDef.ms;
+  const rowId = createNmgSlot(user.id, slotIndex, stackId, tier, tierDef.cost, now, readyAt);
+
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgSubmit', round2(character.cash - cashBefore), character.cash);
+  saveCharacter(user.id, character);
+  res.json({ ok: true, character, slot: { id: rowId, slotIndex, titleId: stackId, tier, submittedAt: now, readyAt } });
+});
+
+app.post('/nmg/reveal', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { slotId } = req.body || {};
+  const row = getNmgSlotById(slotId);
+  if (!row || row.user_id !== req.user.sub) return res.status(404).json({ ok: false, reason: 'Unknown slot.' });
+  if (row.grade !== null) return res.status(409).json({ ok: false, reason: 'Already revealed.' });
+  if (Date.now() < row.ready_at) return res.status(409).json({ ok: false, reason: 'Not ready yet.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+
+  const grade = rollNmgGrade();
+  const gradedId = `${row.title_id}_nmg${grade}`;
+  addToInventory(character, gradedId, 1);
+
+  revealNmgSlot(row.id, grade, Date.now());
+  deleteNmgSlot(row.id);
+  saveCharacter(user.id, character);
+
+  res.json({ ok: true, character, result: { baseTitleId: row.title_id, gradedId, grade } });
 });
 
 app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork));

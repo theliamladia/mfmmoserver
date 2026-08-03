@@ -217,6 +217,55 @@ function getPenitentiaryRecordById(id) {
   return db.prepare('SELECT * FROM penitentiary_records WHERE id = ?').get(id);
 }
 
+// New Milos Grading: kept in its own table, not inside character_json, because /character/sync
+// accepts a client-posted character blob with only a stale-write (expectedRev) check -- no field
+// validation. A ready_at timestamp living inside that blob would be trivially spoofable (edit
+// locally, sync, reveal early), which would make the paid turnaround tiers meaningless. Same
+// reasoning as the crate stock counter (getCrateStock/trySpendCrateStock above): state that must
+// resist client tampering lives here, not in the synced blob.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS nmg_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    title_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    cost INTEGER NOT NULL,
+    submitted_at INTEGER NOT NULL,
+    ready_at INTEGER NOT NULL,
+    grade INTEGER,
+    revealed_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_nmg_slots_user ON nmg_slots (user_id);
+`);
+
+function getActiveNmgSlots(userId) {
+  return db.prepare('SELECT * FROM nmg_slots WHERE user_id = ? AND grade IS NULL ORDER BY slot_index ASC').all(userId);
+}
+
+function getNmgSlotById(id) {
+  return db.prepare('SELECT * FROM nmg_slots WHERE id = ?').get(id);
+}
+
+function createNmgSlot(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt) {
+  const stmt = db.prepare(
+    'INSERT INTO nmg_slots (user_id, slot_index, title_id, tier, cost, submitted_at, ready_at, grade, revealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)'
+  );
+  const info = stmt.run(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt);
+  return info.lastInsertRowid;
+}
+
+function revealNmgSlot(id, grade, revealedAt) {
+  db.prepare('UPDATE nmg_slots SET grade = ?, revealed_at = ? WHERE id = ?').run(grade, revealedAt, id);
+}
+
+// Called once the graded title has been minted into character.inventory -- the row's only job
+// (gate timing, prevent a re-roll) is done at that point; the title itself is now the permanent
+// record, same as any other inventory stack.
+function deleteNmgSlot(id) {
+  db.prepare('DELETE FROM nmg_slots WHERE id = ?').run(id);
+}
+
 // New Milos City chat: a shared table (unlike character_json) since every message needs to be
 // visible to everyone in the room, not just its sender.
 db.exec(`
@@ -1023,6 +1072,11 @@ module.exports = {
   addPenitentiaryCommissary,
   getAllPenitentiaryRecords,
   getPenitentiaryRecordById,
+  getActiveNmgSlots,
+  getNmgSlotById,
+  createNmgSlot,
+  revealNmgSlot,
+  deleteNmgSlot,
   getServerState,
   setServerPaused,
   setServerModifier,
