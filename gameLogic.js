@@ -69,9 +69,9 @@ const CAESAR_TI_TITLE_ID = 'caesarTi';
 // ---------- New Milos Grading (NMG) ----------
 const NMG_MAX_SLOTS = 4;
 const NMG_TIERS = {
-  '14day': { cost: 5000, ms: 14 * 24 * 60 * 60 * 1000 },
-  '7day': { cost: 10000, ms: 7 * 24 * 60 * 60 * 1000 },
-  '24hr': { cost: 20000, ms: 24 * 60 * 60 * 1000 },
+  '3hr': { cost: 5000, ms: 3 * 60 * 60 * 1000 },
+  '1hr': { cost: 10000, ms: 60 * 60 * 1000 },
+  '10min': { cost: 20000, ms: 10 * 60 * 1000 },
 };
 
 // The server has no title/rarity catalog of its own (titles are otherwise entirely client-known/
