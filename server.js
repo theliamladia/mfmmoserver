@@ -29,6 +29,7 @@ const {
   createNmgSlot,
   revealNmgSlot,
   deleteNmgSlot,
+  fastForwardAllActiveNmgSlots,
   getServerState,
   setServerPaused,
   setServerModifier,
@@ -2034,6 +2035,36 @@ app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {
     inventory: character.inventory,
     equipment: character.equipment,
   });
+});
+
+// Grants an arbitrary inventory stack to any player by username -- e.g. hand-awarding a prestige
+// title id like cfHowl_p4. Reuses the same addToInventory/saveCharacter pair every other inventory
+// mutation in this file goes through, so it's subject to the same known race as
+// /admin/reset-all-stats: if the target is mid-session, their next /character/sync can clobber this
+// if it lands first. Fine for the rare, deliberate admin grant this exists for.
+app.post('/admin/grant-item', requireAuth, requireAdminPassword, (req, res) => {
+  const { username, itemId, qty } = req.body || {};
+  const targetUsername = (username || '').trim();
+  const targetItemId = (itemId || '').trim();
+  const targetQty = Math.floor(+qty) || 1;
+  if (!targetUsername || !targetItemId) return res.status(400).json({ ok: false, reason: 'Enter a username and item id.' });
+  if (targetQty < 1) return res.status(400).json({ ok: false, reason: 'Quantity must be at least 1.' });
+
+  const user = getUserByUsername(targetUsername);
+  if (!user) return res.status(404).json({ ok: false, reason: `No player named "${targetUsername}" found.` });
+
+  const character = JSON.parse(user.character_json);
+  addToInventory(character, targetItemId, targetQty);
+  saveCharacter(user.id, character);
+  res.json({ ok: true, message: `Gave ${targetQty}x ${targetItemId} to ${user.username}.` });
+});
+
+// Clears the NMG grading backlog across every player at once -- marks every still-pending slot
+// ready now. Players still have to click REVEAL themselves (the grade is still rolled at reveal
+// time, same as always); this only skips the wait.
+app.post('/admin/nmg-fast-forward-all', requireAuth, requireAdminPassword, (req, res) => {
+  const count = fastForwardAllActiveNmgSlots(Date.now());
+  res.json({ ok: true, message: `Fast-forwarded ${count} pending grading slot(s) to ready.` });
 });
 
 // Every player's Bank/Cold Storage balances in one list -- read-only, admin-only. Reuses

@@ -266,6 +266,14 @@ function deleteNmgSlot(id) {
   db.prepare('DELETE FROM nmg_slots WHERE id = ?').run(id);
 }
 
+// Admin "clear the backlog" action: marks every still-pending slot (across every player) ready
+// right now, so the next /nmg/state poll shows REVEAL instead of a countdown. Only ever lowers
+// ready_at (MIN), never pushes an already-ready slot's timestamp later. Grade itself is untouched
+// -- still rolled at reveal time, same as any other slot.
+function fastForwardAllActiveNmgSlots(now) {
+  return db.prepare('UPDATE nmg_slots SET ready_at = MIN(ready_at, ?) WHERE grade IS NULL').run(now).changes;
+}
+
 // New Milos City chat: a shared table (unlike character_json) since every message needs to be
 // visible to everyone in the room, not just its sender.
 db.exec(`
@@ -1077,6 +1085,7 @@ module.exports = {
   createNmgSlot,
   revealNmgSlot,
   deleteNmgSlot,
+  fastForwardAllActiveNmgSlots,
   getServerState,
   setServerPaused,
   setServerModifier,
