@@ -16,6 +16,7 @@ const {
   createListing,
   getAllListings,
   getListingById,
+  getListingsBySeller,
   deleteListing,
   getActivePenitentiaryRecord,
   createPenitentiaryRecord,
@@ -242,6 +243,10 @@ const {
   doToggleProfilePrivacy,
   doAddShowcaseTitle,
   doRemoveShowcaseTitle,
+  doAddSlabShowcase,
+  doRemoveSlabShowcase,
+  isGradedTitleId,
+  PROFILE_SLAB_MARKET_MAX,
   doPostToWall,
   doDeleteWallPost,
   paginateWall,
@@ -454,6 +459,12 @@ app.get('/profile/:username', requireAuth, (req, res) => {
     if (profile.privacy.portfolio) character.stocks = { holdings: {} };
   }
 
+  // Scoped to this one profile (not the full global MTN board) -- only graded slabs count, since
+  // this is what backs the Player Market section, not a general listings feed.
+  const slabMarketListings = getListingsBySeller(target.id)
+    .filter((row) => isGradedTitleId(row.item_id))
+    .map(serializeListing);
+
   res.json({
     ok: true,
     username: target.username,
@@ -463,6 +474,7 @@ app.get('/profile/:username', requireAuth, (req, res) => {
     wallPage,
     wallTotalPages,
     wallPageNum,
+    slabMarketListings,
   });
 });
 
@@ -489,6 +501,46 @@ app.post('/profile/showcase/add', requireAuth, (req, res) => {
 app.post('/profile/showcase/remove', requireAuth, (req, res) => {
   const { titleId } = req.body || {};
   runAction(req, res, doRemoveShowcaseTitle, titleId);
+});
+
+app.post('/profile/slab-showcase/add', requireAuth, (req, res) => {
+  const { titleId } = req.body || {};
+  runAction(req, res, doAddSlabShowcase, titleId);
+});
+
+app.post('/profile/slab-showcase/remove', requireAuth, (req, res) => {
+  const { titleId } = req.body || {};
+  runAction(req, res, doRemoveSlabShowcase, titleId);
+});
+
+// Not a plain runAction() -- like /mtn/list, this needs the shared mtn_listings DB row inserted
+// alongside the character mutation. Reuses the exact same doCreateListing/createListing pair as
+// the generic MTN market (a listing doesn't care which UI created it), just gated to graded slabs
+// only and capped at PROFILE_SLAB_MARKET_MAX active listings, and always qty 1 -- these are meant
+// to read as one slab per listing, not a stackable quantity.
+app.post('/profile/slab-market/list', requireAuth, (req, res) => {
+  const { itemId, price } = req.body || {};
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+  if (!isGradedTitleId(itemId)) return res.status(400).json({ ok: false, reason: 'Only graded slabs can be listed here.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+
+  const activeCount = getListingsBySeller(user.id).filter((row) => isGradedTitleId(row.item_id)).length;
+  if (activeCount >= PROFILE_SLAB_MARKET_MAX) {
+    return res.status(429).json({ ok: false, reason: `You already have ${PROFILE_SLAB_MARKET_MAX} slabs listed -- cancel one first.` });
+  }
+
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  const result = doCreateListing(character, itemId, 1, price);
+  if (!result.ok) return res.status(429).json(result);
+
+  createListing(user.id, `${character.firstName} ${character.lastName}`, itemId, 1, round2(price));
+  saveCharacter(user.id, character);
+  res.json(result);
 });
 
 // Wall posts mutate the TARGET's save, not the caller's -- same two-character shape as

@@ -165,6 +165,12 @@ function getListingById(id) {
   return db.prepare('SELECT * FROM mtn_listings WHERE id = ?').get(id);
 }
 
+// Used by the Profile "Player Market" (graded slabs only, filtered by the caller) -- the generic
+// MTN market page never needed a per-seller query since it just lists everything at once.
+function getListingsBySeller(sellerUserId) {
+  return db.prepare('SELECT * FROM mtn_listings WHERE seller_user_id = ? ORDER BY listed_at DESC').all(sellerUserId);
+}
+
 function deleteListing(id) {
   db.prepare('DELETE FROM mtn_listings WHERE id = ?').run(id);
 }
@@ -1072,6 +1078,7 @@ module.exports = {
   createListing,
   getAllListings,
   getListingById,
+  getListingsBySeller,
   deleteListing,
   getActivePenitentiaryRecord,
   createPenitentiaryRecord,

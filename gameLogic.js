@@ -109,6 +109,14 @@ function nmgBaseIdOf(stackId) {
   return m ? m[1] : stackId;
 }
 
+// A revealed grade is permanently baked into the id itself (see the client's NMG_ID_RE in
+// js/core.js) -- this is how the Portfolio Showcase and Player Market (below) tell a graded slab
+// apart from any other opaque, client-trusted title id without needing a title catalog of their own.
+const NMG_GRADED_ID_RE = /^.+_nmg\d{1,2}$/;
+function isGradedTitleId(itemId) {
+  return NMG_GRADED_ID_RE.test(String(itemId || ''));
+}
+
 // 10 stays genuinely rare; "Worn" (7-4) is the bulk of outcomes; "Sub" (3-1) is a real but small
 // tail. Sums to 100.
 const NMG_GRADE_WEIGHTS = { 10: 2, 9: 8, 8: 15, 7: 20, 6: 20, 5: 15, 4: 10, 3: 6, 2: 3, 1: 1 };
@@ -2925,6 +2933,8 @@ function altcoinFullBuyoutPayout(coin, holdings) {
 
 // ---------- Player Profiles ----------
 const PROFILE_SHOWCASE_MAX = 4;
+const PROFILE_SLAB_SHOWCASE_MAX = 4;
+const PROFILE_SLAB_MARKET_MAX = 4;
 const PROFILE_STATUS_MAX_LEN = 100;
 const PROFILE_WALL_POST_MAX_LEN = 300;
 const PROFILE_WALL_PAGE_SIZE = 5;
@@ -2932,9 +2942,10 @@ const PROFILE_WALL_PAGE_SIZE = 5;
 const PROFILE_PRIVACY_FIELDS = ['cash', 'fc', 'portfolio'];
 
 function ensureProfileState(character) {
-  if (!character.profile) character.profile = { bannerTitleId: null, showcaseTitleIds: [], status: '', wall: [] };
+  if (!character.profile) character.profile = { bannerTitleId: null, showcaseTitleIds: [], slabShowcaseIds: [], status: '', wall: [] };
   if (character.profile.bannerTitleId === undefined) character.profile.bannerTitleId = null;
   if (!character.profile.showcaseTitleIds) character.profile.showcaseTitleIds = [];
+  if (!character.profile.slabShowcaseIds) character.profile.slabShowcaseIds = [];
   if (typeof character.profile.status !== 'string') character.profile.status = '';
   if (!character.profile.wall) character.profile.wall = [];
   if (!character.profile.privacy) character.profile.privacy = { cash: false, fc: false, portfolio: false };
@@ -2999,6 +3010,28 @@ function doRemoveShowcaseTitle(character, titleId) {
   const profile = ensureProfileState(character);
   profile.showcaseTitleIds = profile.showcaseTitleIds.filter((id) => id !== titleId);
   return { ok: true, message: 'Removed from Title Showcase.', cls: '', character };
+}
+
+// Portfolio Showcase: same shape as the Title Showcase above, but restricted to graded slabs (the
+// point is the full slab art, which only a graded title has) and rendered full-size on the client
+// instead of the small badge chip.
+function doAddSlabShowcase(character, titleId) {
+  const profile = ensureProfileState(character);
+  if (!titleId) return { ok: false, reason: 'Unknown title.' };
+  if (!isGradedTitleId(titleId)) return { ok: false, reason: 'Only graded slabs can go in the Portfolio Showcase.' };
+  if (!characterOwnsTitle(character, titleId)) return { ok: false, reason: "You don't own that slab." };
+  if (profile.slabShowcaseIds.includes(titleId)) return { ok: false, reason: 'Already in your Portfolio Showcase.' };
+  if (profile.slabShowcaseIds.length >= PROFILE_SLAB_SHOWCASE_MAX) {
+    return { ok: false, reason: `Portfolio Showcase is full (max ${PROFILE_SLAB_SHOWCASE_MAX}) -- remove one first.` };
+  }
+  profile.slabShowcaseIds.push(titleId);
+  return { ok: true, message: 'Added to Portfolio Showcase.', cls: 'gain', character };
+}
+
+function doRemoveSlabShowcase(character, titleId) {
+  const profile = ensureProfileState(character);
+  profile.slabShowcaseIds = profile.slabShowcaseIds.filter((id) => id !== titleId);
+  return { ok: true, message: 'Removed from Portfolio Showcase.', cls: '', character };
 }
 
 // Wall posts live on the PROFILE OWNER's own save (like custom titles) -- unlike everything else
@@ -3476,10 +3509,15 @@ module.exports = {
   doToggleProfilePrivacy,
   doAddShowcaseTitle,
   doRemoveShowcaseTitle,
+  doAddSlabShowcase,
+  doRemoveSlabShowcase,
+  isGradedTitleId,
   doPostToWall,
   doDeleteWallPost,
   paginateWall,
   PROFILE_SHOWCASE_MAX,
+  PROFILE_SLAB_SHOWCASE_MAX,
+  PROFILE_SLAB_MARKET_MAX,
   PROFILE_STATUS_MAX_LEN,
   PROFILE_WALL_POST_MAX_LEN,
   computeCharacterLevel,
