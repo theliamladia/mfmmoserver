@@ -2348,6 +2348,7 @@ function serializeChatMessage(row) {
     senderName: row.sender_name,
     titleText: row.title_text,
     titleId: row.title_id,
+    badgeId: row.badge_id,
     message: row.message,
     sentAt: row.sent_at,
   };
@@ -2379,7 +2380,12 @@ app.post('/chat/send', requireAuth, (req, res) => {
     saveCharacter(user.id, character);
   }
 
-  createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN), safeTitleId);
+  // Read the sender's equipped badge straight off their own already-loaded character (not a
+  // client-supplied param like titleId) -- the server has it right here, no reason to trust a
+  // second client-sent value that could drift from what's actually equipped.
+  const badgeId = (character.badges && character.badges.equipped) || null;
+
+  createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN), safeTitleId, badgeId);
   res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
 });
 

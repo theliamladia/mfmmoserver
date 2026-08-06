@@ -297,13 +297,18 @@ db.exec(`
 if (!db.prepare('PRAGMA table_info(chat_messages)').all().some((c) => c.name === 'title_id')) {
   db.exec('ALTER TABLE chat_messages ADD COLUMN title_id TEXT');
 }
+// Same bolt-on reasoning as title_id, for the Balaclava Badge equip slot -- lets the client show
+// the sender's equipped badge chip before their title in chat, same trust level (client-supplied).
+if (!db.prepare('PRAGMA table_info(chat_messages)').all().some((c) => c.name === 'badge_id')) {
+  db.exec('ALTER TABLE chat_messages ADD COLUMN badge_id TEXT');
+}
 const CHAT_HISTORY_LIMIT = 50;
 
-function createChatMessage(userId, senderName, titleText, message, titleId) {
+function createChatMessage(userId, senderName, titleText, message, titleId, badgeId) {
   const stmt = db.prepare(
-    'INSERT INTO chat_messages (user_id, sender_name, title_text, message, sent_at, title_id) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO chat_messages (user_id, sender_name, title_text, message, sent_at, title_id, badge_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
-  const info = stmt.run(userId, senderName, titleText, message, Date.now(), titleId || null);
+  const info = stmt.run(userId, senderName, titleText, message, Date.now(), titleId || null, badgeId || null);
   return info.lastInsertRowid;
 }
 

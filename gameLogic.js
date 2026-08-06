@@ -541,6 +541,7 @@ function newCharacter(firstName, lastName) {
     enjoyed: { active: false, until: 0, byName: null },
     secumax: { tier: null, lastBillTs: Date.now(), robBlocksUsed: 0, enjoyBlocksUsed: 0, slimeBlocksUsed: 0 },
     badges: { equipped: null },
+    visions: { equipped: null },
     moralsCenter: { choice: null, lastTickTs: Date.now() },
     mtnHistory: [],
     maxxPurchased: [],
@@ -568,6 +569,7 @@ function resetCharacterKeepCosmetics(character) {
   const fresh = newCharacter(character.firstName, character.lastName);
   fresh.titles = character.titles;
   fresh.badges = character.badges || { equipped: null };
+  fresh.visions = character.visions || { equipped: null };
   fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
   return fresh;
 }
@@ -590,6 +592,7 @@ function resetCharacterSeasonWipe(character) {
     customTitles: character.titles.customTitles || [],
   };
   fresh.badges = character.badges || { equipped: null };
+  fresh.visions = character.visions || { equipped: null };
   fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
   fresh.cash = Math.round((character.cash || 0) / 100);
   return fresh;
