@@ -536,6 +536,11 @@ function newCharacter(firstName, lastName) {
     crimeRecord: { streak: 0 },
     slime: { active: false, until: 0, byName: null },
     slimeRecord: [],
+    variety: 0,
+    varietyTimeout: { until: 0 },
+    enjoyed: { active: false, until: 0, byName: null },
+    secumax: { tier: null, lastBillTs: Date.now(), robBlocksUsed: 0, enjoyBlocksUsed: 0, slimeBlocksUsed: 0 },
+    badges: { equipped: null },
     moralsCenter: { choice: null, lastTickTs: Date.now() },
     mtnHistory: [],
     maxxPurchased: [],
@@ -562,6 +567,7 @@ function isCosmeticInventoryId(id) {
 function resetCharacterKeepCosmetics(character) {
   const fresh = newCharacter(character.firstName, character.lastName);
   fresh.titles = character.titles;
+  fresh.badges = character.badges || { equipped: null };
   fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
   return fresh;
 }
@@ -583,6 +589,7 @@ function resetCharacterSeasonWipe(character) {
     equipped: character.titles.equipped,
     customTitles: character.titles.customTitles || [],
   };
+  fresh.badges = character.badges || { equipped: null };
   fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
   fresh.cash = Math.round((character.cash || 0) / 100);
   return fresh;
@@ -685,7 +692,7 @@ function doWork(character) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
   }
 
-  const gain = randInt(2, 10);
+  const gain = round2(randInt(2, 10) * varietyPayMultiplier(character));
   character.cash += gain;
   character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
   character.cooldowns.work = Date.now();
@@ -747,7 +754,7 @@ function doCrime(character) {
     };
   }
 
-  const gain = randInt(100, 1000);
+  const gain = round2(randInt(100, 1000) * varietyPayMultiplier(character));
   character.cash += gain;
   character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
 
@@ -1387,6 +1394,7 @@ function doResignGoodJob(character) {
 // server-side (jobSkill1..4) instead of trusting a client-supplied cooldown key, and enforces the
 // cooldown itself -- the client only disabled the button, it never validated this internally.
 function doGoodJobWork(character, skillKey) {
+  if (isVarietyAutoFired(character)) return { ok: false, reason: 'Your Variety is too high -- you were fired. Renounce Variety at the Morals Center to work again.' };
   const job = GOOD_JOBS_BY_ID[character.jobs.currentJob];
   if (!job) return { ok: false, reason: 'You are not employed.' };
   const skillIndex = SKILL_KEYS.indexOf(skillKey);
@@ -1401,7 +1409,8 @@ function doGoodJobWork(character, skillKey) {
   const maxxActive = isMaxxComplete(character);
   const gain = round2(randFloat(rank.payMin, rank.payMax)
     * (ceoActive ? GOOD_CEO_MULTIPLIER : 1)
-    * (maxxActive ? MAXX_COMPLETE_MULTIPLIER : 1));
+    * (maxxActive ? MAXX_COMPLETE_MULTIPLIER : 1)
+    * varietyPayMultiplier(character));
   character.cash = round2(character.cash + gain);
   const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * goodJobSkillTrainMult(character);
   character.jobs.skills[skillKey] = clampStat(character.jobs.skills[skillKey] + skillGain);
@@ -1439,6 +1448,7 @@ function doResignBadJob(character) {
 // Mirrors the client's doBadJobWork() exactly, including the jail-bust path. Same cooldown-key
 // derivation and internal cooldown enforcement as doGoodJobWork().
 function doBadJobWork(character, skillKey) {
+  if (isVarietyAutoFired(character)) return { ok: false, reason: 'Your Variety is too high -- you were fired. Renounce Variety at the Morals Center to work again.' };
   const job = BAD_JOBS_BY_ID[character.badJobs.currentJob];
   if (!job) return { ok: false, reason: 'You are not employed.' };
   const skillIndex = SKILL_KEYS.indexOf(skillKey);
@@ -1468,7 +1478,7 @@ function doBadJobWork(character, skillKey) {
     };
   }
 
-  const gain = round2(randFloat(rank.payMin, rank.payMax));
+  const gain = round2(randFloat(rank.payMin, rank.payMax) * varietyPayMultiplier(character));
   character.cash = round2(character.cash + gain);
   const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * badJobSkillTrainMult(character);
   character.badJobs.skills[skillKey] = clampStat(character.badJobs.skills[skillKey] + skillGain);
@@ -1628,6 +1638,20 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
   if (remaining > 0) return { ok: false, reason: `You need to wait ${Math.ceil(remaining / 1000)}s before robbing them again.` };
 
   attacker.cooldowns[cooldownKey] = Date.now();
+
+  const { blocked } = checkSecumaxBlock(target, 'rob');
+  if (blocked) {
+    return {
+      ok: true,
+      jailed: false,
+      blocked: true,
+      message: `${target.firstName} has Secumax protection -- your robbery attempt was stopped.`,
+      cls: 'loss',
+      attacker,
+      target,
+    };
+  }
+
   const speed = attacker.stats.speed;
   const looks = Math.min(attacker.stats.looks, STAT_CAP);
   const findOutChance = Math.max(0.1, Math.min(0.55, 0.55 - (speed / 100) * 0.35 - (looks / 100) * 0.10));
@@ -1791,6 +1815,24 @@ function doSlimePlayer(shooter, target, targetUserId) {
 
   shooter.cooldowns[cooldownKey] = Date.now();
 
+  const { blocked, counterslime } = checkSecumaxBlock(target, 'slime');
+  if (blocked) {
+    if (counterslime) slimeCharacter(shooter, `${target.firstName} ${target.lastName} (Secumax counterslime)`);
+    return {
+      ok: true,
+      jailed: false,
+      blocked: true,
+      counterslime,
+      message: counterslime
+        ? `${target.firstName} has SecuMaximum -- your attempt was stopped AND you got countersLimed! You're locked out for 10 minutes.`
+        : `${target.firstName} has Secumax protection -- your sliming attempt was stopped.`,
+      cls: 'loss',
+      shooter,
+      target,
+      duel: null,
+    };
+  }
+
   // Caught before you even get a shot off -- gun confiscated, attempt never happens.
   if (checkIllegalGunBust(shooter, shooterSlot)) {
     return {
@@ -1889,6 +1931,222 @@ function doSlimePlayer(shooter, target, targetUserId) {
     shooter,
     target,
   };
+}
+
+// ---------- Secumax ----------
+// Subscription-based Rob/Enjoy/Slime shield, billed daily via a lazy tick (same idiom as every
+// other passive-accrual system in this file -- charge for however many full days elapsed since
+// lastBillTs, rather than a real cron). Block counts reset every time a new billing day starts.
+// Per-tier limits transcribed directly from the update4 spec, not invented: Basic stops 5
+// Robs + 5 Enjoys/day (no Sliming protection at all); Plus stops unlimited Rob/Enjoy + 1
+// Sliming/day; Max stops everything unlimited and countersliming the attacker back.
+const SECUMAX_BILL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SECUMAX_TIERS = {
+  basic: { id: 'basic', name: 'Secumax Basic', costPerDay: 10000, robLimit: 5, enjoyLimit: 5, slimeLimit: 0, counterslime: false },
+  plus: { id: 'plus', name: 'Secumax Plus', costPerDay: 50000, robLimit: Infinity, enjoyLimit: Infinity, slimeLimit: 1, counterslime: false },
+  max: { id: 'max', name: 'SecuMaximum', costPerDay: 90000, robLimit: Infinity, enjoyLimit: Infinity, slimeLimit: Infinity, counterslime: true },
+};
+
+function ensureSecumaxState(character) {
+  if (!character.secumax) {
+    character.secumax = { tier: null, lastBillTs: Date.now(), robBlocksUsed: 0, enjoyBlocksUsed: 0, slimeBlocksUsed: 0 };
+  }
+  return character.secumax;
+}
+
+// Charges one day's fee per full day elapsed since the last bill. Auto-cancels (tier -> null) the
+// instant a due payment can't be covered rather than letting debt accrue -- "can't afford it, lose
+// the perk," not a credit mechanic. Also resets the daily block counters on every new billing day,
+// even if the tier itself didn't change.
+function ensureSecumaxBilled(character) {
+  const sec = ensureSecumaxState(character);
+  if (!sec.tier || !SECUMAX_TIERS[sec.tier]) {
+    sec.tier = null;
+    return sec;
+  }
+  const tierDef = SECUMAX_TIERS[sec.tier];
+  const now = Date.now();
+  let daysElapsed = Math.floor((now - sec.lastBillTs) / SECUMAX_BILL_INTERVAL_MS);
+  while (daysElapsed > 0) {
+    if (character.cash < tierDef.costPerDay) {
+      sec.tier = null;
+      sec.lastBillTs = now;
+      sec.robBlocksUsed = 0;
+      sec.enjoyBlocksUsed = 0;
+      sec.slimeBlocksUsed = 0;
+      return sec;
+    }
+    character.cash = round2(character.cash - tierDef.costPerDay);
+    sec.lastBillTs += SECUMAX_BILL_INTERVAL_MS;
+    sec.robBlocksUsed = 0;
+    sec.enjoyBlocksUsed = 0;
+    sec.slimeBlocksUsed = 0;
+    daysElapsed -= 1;
+  }
+  return sec;
+}
+
+// Called on the VICTIM's character before resolving a Rob/Enjoy/Slime attempt against them.
+// `kind` is 'rob' | 'enjoy' | 'slime'. Returns { blocked, counterslime } -- counterslime is only
+// ever true for a blocked Slime attempt at Max tier.
+function checkSecumaxBlock(target, kind) {
+  const sec = ensureSecumaxBilled(target);
+  if (!sec.tier) return { blocked: false, counterslime: false };
+  const tierDef = SECUMAX_TIERS[sec.tier];
+  const limitKey = `${kind}Limit`;
+  const usedKey = `${kind}BlocksUsed`;
+  if (sec[usedKey] >= tierDef[limitKey]) return { blocked: false, counterslime: false };
+  sec[usedKey] += 1;
+  return { blocked: true, counterslime: kind === 'slime' && tierDef.counterslime };
+}
+
+// ---------- Variety & Enjoying ----------
+// Variety is a 0-100 subtrait (0 = never enjoyed/chilled, 100 = maxed out) with a 4-tier debuff
+// ladder, per the update4 spec's "Dangers of Variety" table -- transcribed directly, not invented.
+const VARIETY_TIERS = [
+  { min: 100, jobDebuffPct: 1.00, timeoutMs: 24 * 60 * 60 * 1000 },
+  { min: 75, jobDebuffPct: 0.90, blockCosmetics: true },
+  { min: 50, jobDebuffPct: 0.50, forceDirtyBad: true },
+  { min: 20, jobDebuffPct: 0.20, autoFired: true },
+];
+const ENJOY_VICTIM_VARIETY_GAIN = 20;
+const ENJOY_ATTACKER_VARIETY_GAIN = 5;
+const CHILL_VARIETY_GAIN = 1;
+const VARIETY_RENOUNCE_COST = 5000; // reuses Morals Center's stance-change price for consistency
+const VARIETY_RENOUNCE_AMOUNT = 25;
+
+function ensureVarietyState(character) {
+  if (typeof character.variety !== 'number') character.variety = 0;
+  if (!character.varietyTimeout) character.varietyTimeout = { until: 0 };
+  if (!character.enjoyed) character.enjoyed = { active: false, until: 0, byName: null };
+  return character.variety;
+}
+
+// The per-attempt 1-minute victim lockout ("the same timeout screen as Sliming, but for just 1
+// minute") -- distinct from varietyTimeout, which is the 24-hour consequence of hitting 100%
+// Variety. Same {active, until, byName} shape as character.slime for easy client-side reuse.
+function isEnjoyed(character) {
+  ensureVarietyState(character);
+  return character.enjoyed.active && Date.now() < character.enjoyed.until;
+}
+
+const ENJOY_LOCKOUT_MS = 60 * 1000;
+
+function varietyTierFor(variety) {
+  return VARIETY_TIERS.find((t) => variety >= t.min) || null;
+}
+
+// Multiplies job pay -- Slut is exempt per spec ("except Slut"), so callers must skip this for
+// the Slut hustle specifically.
+function varietyPayMultiplier(character) {
+  ensureVarietyState(character);
+  const tier = varietyTierFor(character.variety);
+  return tier ? 1 - tier.jobDebuffPct : 1;
+}
+
+function isVarietyAutoFired(character) {
+  ensureVarietyState(character);
+  const tier = varietyTierFor(character.variety);
+  return !!(tier && tier.autoFired);
+}
+
+function isVarietyCosmeticsBlocked(character) {
+  ensureVarietyState(character);
+  const tier = varietyTierFor(character.variety);
+  return !!(tier && tier.blockCosmetics);
+}
+
+function isVarietyForcedDirtyBad(character) {
+  ensureVarietyState(character);
+  const tier = varietyTierFor(character.variety);
+  return !!(tier && tier.forceDirtyBad);
+}
+
+function isVarietyTimedOut(character) {
+  ensureVarietyState(character);
+  return character.varietyTimeout.until > Date.now();
+}
+
+// Raises variety and, on crossing into the 100% tier, starts the 1-day timeout and auto-fires from
+// any current job (20%+ tier already blocks working, but this makes the state change immediate
+// rather than waiting for the next job-action attempt to notice).
+function addVariety(character, amount) {
+  ensureVarietyState(character);
+  character.variety = Math.max(0, Math.min(100, character.variety + amount));
+  const tier = varietyTierFor(character.variety);
+  if (tier && tier.timeoutMs) {
+    character.varietyTimeout.until = Date.now() + tier.timeoutMs;
+  }
+  if (tier && tier.autoFired) {
+    character.jobs.currentJob = null;
+    character.badJobs.currentJob = null;
+  }
+}
+
+const ENJOY_COOLDOWN_MS = 5 * 60 * 1000;
+
+// Success chance is the attacker's (Looks + Attack) average vs. the target's Defense, same
+// clamped-linear shape doRobPlayer's winChance already uses -- the update4 spec only says "based
+// on your Looks and Attack," so the target's Defense as the resisting stat (rather than an
+// unopposed roll) is this file's own call, made for consistency with every other PvP formula here.
+function doEnjoyPlayer(attacker, target, targetUserId) {
+  ensureVarietyState(attacker);
+  ensureVarietyState(target);
+
+  const cooldownKey = `enjoy_${targetUserId}`;
+  const remaining = getRemainingCooldown(attacker, cooldownKey, ENJOY_COOLDOWN_MS);
+  if (remaining > 0) return { ok: false, reason: `You need to wait ${Math.ceil(remaining / 1000)}s before trying that again.` };
+  if (isVarietyTimedOut(target)) return { ok: false, reason: `${target.firstName} is already in Variety timeout.` };
+  if (isEnjoyed(target)) return { ok: false, reason: `${target.firstName} is already enjoyed.` };
+
+  attacker.cooldowns[cooldownKey] = Date.now();
+
+  const { blocked, counterslime } = checkSecumaxBlock(target, 'enjoy');
+  if (blocked) {
+    return {
+      ok: true,
+      blocked: true,
+      counterslime,
+      message: `${target.firstName} has Secumax protection -- your attempt was stopped.`,
+      cls: 'loss',
+      attacker,
+      target,
+    };
+  }
+
+  const attackerScore = (Math.min(attacker.stats.looks, STAT_CAP) + Math.min(attacker.stats.attack, STAT_CAP)) / 2;
+  const enjoyChance = Math.max(0.15, Math.min(0.85, 0.5 + (attackerScore - target.stats.defense) * 0.015));
+  if (Math.random() >= enjoyChance) {
+    return { ok: true, blocked: false, success: false, message: `${target.firstName} fought you off. No dice.`, cls: 'loss', attacker, target };
+  }
+
+  addVariety(target, ENJOY_VICTIM_VARIETY_GAIN);
+  addVariety(attacker, ENJOY_ATTACKER_VARIETY_GAIN);
+  target.enjoyed = { active: true, until: Date.now() + ENJOY_LOCKOUT_MS, byName: `${attacker.firstName} ${attacker.lastName}` };
+
+  return {
+    ok: true,
+    blocked: false,
+    success: true,
+    message: `You enjoyed ${target.firstName} ${target.lastName}! They're locked out for 1 minute.`,
+    chatAnnouncement: `I'm ${target.firstName} ${target.lastName} and I just got enjoyed by ${attacker.firstName} ${attacker.lastName}, I couldn't do a THING!`,
+    cls: 'gain',
+    attacker,
+    target,
+  };
+}
+
+// Costs a flat fee and knocks a flat amount off Variety -- exact price/amount are this file's own
+// call (the update4 spec only says "renounce Variety... to bring your percentage back down"),
+// reusing Morals Center's $5,000 stance-change price for a consistent "meaningful but not
+// prohibitive" feel rather than inventing a new number.
+function renounceVariety(character) {
+  ensureVarietyState(character);
+  if (character.variety <= 0) return { ok: false, reason: "You don't have any Variety to renounce." };
+  if (character.cash < VARIETY_RENOUNCE_COST) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - VARIETY_RENOUNCE_COST);
+  character.variety = Math.max(0, character.variety - VARIETY_RENOUNCE_AMOUNT);
+  return { ok: true, message: `Renounced Variety. Now at ${character.variety}%.`, cls: 'gain' };
 }
 
 // Minimal version of the client's getItemDef() -- only the fields Combat needs (atkBonus,
@@ -3407,6 +3665,21 @@ module.exports = {
   newCharacter,
   resetCharacterKeepCosmetics,
   resetCharacterSeasonWipe,
+  SECUMAX_TIERS,
+  ensureSecumaxState,
+  ensureSecumaxBilled,
+  checkSecumaxBlock,
+  VARIETY_TIERS,
+  VARIETY_RENOUNCE_COST,
+  VARIETY_RENOUNCE_AMOUNT,
+  ensureVarietyState,
+  varietyTierFor,
+  isVarietyTimedOut,
+  isEnjoyed,
+  addVariety,
+  CHILL_VARIETY_GAIN,
+  doEnjoyPlayer,
+  renounceVariety,
   doWork,
   doSlut,
   doCrime,

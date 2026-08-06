@@ -170,6 +170,18 @@ const {
   doRobPlayer,
   doSlimePlayer,
   isSlimed,
+  SECUMAX_TIERS,
+  ensureSecumaxState,
+  ensureSecumaxBilled,
+  VARIETY_TIERS,
+  VARIETY_RENOUNCE_COST,
+  ensureVarietyState,
+  isVarietyTimedOut,
+  isEnjoyed,
+  addVariety,
+  CHILL_VARIETY_GAIN,
+  doEnjoyPlayer,
+  renounceVariety,
   doStartFight,
   doCombatAction,
   doFlee,
@@ -777,6 +789,110 @@ app.post('/players/slime', requireAuth, (req, res) => {
     cls: result.cls,
     character: shooterCharacter,
   });
+});
+
+// ---------- Enjoying & Variety ----------
+app.post('/players/enjoy', requireAuth, (req, res) => {
+  const { targetUsername } = req.body || {};
+  const targetUser = targetUsername ? getUserByUsername(targetUsername) : null;
+  if (!targetUser) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  if (targetUser.id === req.user.sub) return res.status(429).json({ ok: false, reason: "You can't enjoy yourself. Well, you know what we mean." });
+
+  const attackerUser = getUserById(req.user.sub);
+  if (!attackerUser) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const attackerCharacter = JSON.parse(attackerUser.character_json);
+  const targetCharacter = JSON.parse(targetUser.character_json);
+
+  const result = doEnjoyPlayer(attackerCharacter, targetCharacter, targetUser.id);
+  if (!result.ok) return res.status(429).json(result);
+
+  saveCharacter(attackerUser.id, attackerCharacter);
+  saveCharacter(targetUser.id, targetCharacter);
+
+  if (result.chatAnnouncement) {
+    createChatMessage(attackerUser.id, 'Milos City Announcer', 'SYSTEM', result.chatAnnouncement, null);
+  }
+
+  res.json({
+    ok: true,
+    blocked: result.blocked,
+    success: result.success,
+    message: result.message,
+    cls: result.cls,
+    character: attackerCharacter,
+  });
+});
+
+app.get('/variety/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  ensureVarietyState(character);
+  saveCharacter(user.id, character);
+  res.json({
+    ok: true,
+    variety: character.variety,
+    timedOut: isVarietyTimedOut(character),
+    timeoutUntil: character.varietyTimeout.until,
+    enjoyed: isEnjoyed(character),
+    enjoyedUntil: character.enjoyed.until,
+    enjoyedByName: character.enjoyed.byName,
+    renounceCost: VARIETY_RENOUNCE_COST,
+    tiers: VARIETY_TIERS,
+  });
+});
+
+app.post('/variety/renounce', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const result = renounceVariety(character);
+  if (!result.ok) return res.status(429).json(result);
+  saveCharacter(user.id, character);
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'variety/renounce', -VARIETY_RENOUNCE_COST, character.cash);
+  res.json({ ok: true, message: result.message, cls: result.cls, character });
+});
+
+// ---------- Secumax ----------
+app.get('/secumax/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const sec = ensureSecumaxBilled(character);
+  saveCharacter(user.id, character);
+  res.json({ ok: true, secumax: sec, tiers: SECUMAX_TIERS, character });
+});
+
+app.post('/secumax/subscribe', requireAuth, (req, res) => {
+  const { tier } = req.body || {};
+  const tierDef = SECUMAX_TIERS[tier];
+  if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown tier.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const sec = ensureSecumaxBilled(character);
+  if (character.cash < tierDef.costPerDay) return res.status(429).json({ ok: false, reason: 'Not enough Floydbucks for the first day.' });
+
+  character.cash = round2(character.cash - tierDef.costPerDay);
+  sec.tier = tier;
+  sec.lastBillTs = Date.now();
+  sec.robBlocksUsed = 0;
+  sec.enjoyBlocksUsed = 0;
+  sec.slimeBlocksUsed = 0;
+  saveCharacter(user.id, character);
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'secumax/subscribe', -tierDef.costPerDay, character.cash);
+  res.json({ ok: true, message: `Subscribed to ${tierDef.name}.`, cls: 'gain', character, secumax: sec });
+});
+
+app.post('/secumax/cancel', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const sec = ensureSecumaxBilled(character);
+  sec.tier = null;
+  saveCharacter(user.id, character);
+  res.json({ ok: true, message: 'Secumax cancelled. No refund for today.', cls: '', character, secumax: sec });
 });
 
 function serializeSlimeNotification(row) {
@@ -2126,6 +2242,25 @@ app.post('/admin/grant-item', requireAuth, requireAdminPassword, (req, res) => {
   res.json({ ok: true, message: `Gave ${targetQty}x ${targetItemId} to ${user.username}.` });
 });
 
+// Same shape as /admin/grant-item, but for cash -- logs a transaction (unlike grant-item) since
+// every other cash mutation in this file does, for the same audit-trail reason.
+app.post('/admin/grant-cash', requireAuth, requireAdminPassword, (req, res) => {
+  const { username, amount } = req.body || {};
+  const targetUsername = (username || '').trim();
+  const targetAmount = round2(+amount);
+  if (!targetUsername) return res.status(400).json({ ok: false, reason: 'Enter a username.' });
+  if (!(targetAmount > 0)) return res.status(400).json({ ok: false, reason: 'Amount must be a positive number.' });
+
+  const user = getUserByUsername(targetUsername);
+  if (!user) return res.status(404).json({ ok: false, reason: `No player named "${targetUsername}" found.` });
+
+  const character = JSON.parse(user.character_json);
+  character.cash = round2(character.cash + targetAmount);
+  saveCharacter(user.id, character);
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'admin/grant-cash', targetAmount, character.cash);
+  res.json({ ok: true, message: `Gave $${targetAmount.toLocaleString()} to ${user.username}.` });
+});
+
 // Clears the NMG grading backlog across every player at once -- marks every still-pending slot
 // ready now. Players still have to click REVEAL themselves (the grade is still rolled at reveal
 // time, same as always); this only skips the wait.
@@ -2236,6 +2371,13 @@ app.post('/chat/send', requireAuth, (req, res) => {
   const senderName = `${character.firstName} ${character.lastName}`;
   const safeTitleText = (titleText || 'CIVILIAN').slice(0, CHAT_TITLE_MAX_LEN);
   const safeTitleId = typeof titleId === 'string' ? titleId.slice(0, CHAT_TITLE_MAX_LEN) : null;
+
+  // "Chill in Chat" -- typing exactly "chill" (any case/whitespace) bumps Variety +1%, on top of
+  // posting the message normally.
+  if (trimmed.toLowerCase() === 'chill') {
+    addVariety(character, CHILL_VARIETY_GAIN);
+    saveCharacter(user.id, character);
+  }
 
   createChatMessage(user.id, senderName, safeTitleText, trimmed.slice(0, CHAT_MESSAGE_MAX_LEN), safeTitleId);
   res.json({ ok: true, messages: getRecentChatMessages().map(serializeChatMessage) });
