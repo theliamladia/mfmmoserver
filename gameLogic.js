@@ -192,17 +192,17 @@ const LOOKS_TRAIN_K = LOOKS_TRAIN_BONUS_MAX / (1 - Math.sqrt(LOOKS_TRAIN_BASE / 
 const GOOD_CEO_MULTIPLIER = 1.6;
 const GOOD_CEO_MIN_AVG = 95; // Regional Manager rank
 
-// Pay ranges are 10% above their original values (Drugs & Rugs balance pass -- Good Hustle pay up).
-// Pay ranges are 32% above their original values now (10% from the first Drugs & Rugs balance
-// pass, another 20% on top of that per Update 4's second Good Hustle buff). Must match JOB_RANKS
+// Pay ranges are 16x their prior values now (was already 32% above original -- 10% from the first
+// Drugs & Rugs balance pass, 20% from Update 4's second Good Hustle buff -- then multiplied 16x
+// again so a starting Trainee averages ~$5-8/click instead of ~$0.40). Must match JOB_RANKS
 // in mfmmoalpha/js/core.js exactly.
 const JOB_RANKS = [
-  { minAvg: 0, title: 'Trainee', payMin: 0.132, payMax: 0.66, cooldownMs: 2000 },
-  { minAvg: 15, title: 'Associate', payMin: 0.264, payMax: 0.996, cooldownMs: 1800 },
-  { minAvg: 35, title: 'Senior Associate', payMin: 0.528, payMax: 1.452, cooldownMs: 1600 },
-  { minAvg: 55, title: 'Supervisor', payMin: 0.924, payMax: 2.376, cooldownMs: 1400 },
-  { minAvg: 75, title: 'Manager', payMin: 1.524, payMax: 3.636, cooldownMs: 1200 },
-  { minAvg: 95, title: 'Regional Manager', payMin: 2.376, payMax: 5.28, cooldownMs: 1000 },
+  { minAvg: 0, title: 'Trainee', payMin: 2.112, payMax: 10.56, cooldownMs: 2000 },
+  { minAvg: 15, title: 'Associate', payMin: 4.224, payMax: 15.936, cooldownMs: 1800 },
+  { minAvg: 35, title: 'Senior Associate', payMin: 8.448, payMax: 23.232, cooldownMs: 1600 },
+  { minAvg: 55, title: 'Supervisor', payMin: 14.784, payMax: 38.016, cooldownMs: 1400 },
+  { minAvg: 75, title: 'Manager', payMin: 24.384, payMax: 58.176, cooldownMs: 1200 },
+  { minAvg: 95, title: 'Regional Manager', payMin: 38.016, payMax: 84.48, cooldownMs: 1000 },
 ];
 const BAD_JOB_RANKS = [
   { minAvg: 0, title: 'Rookie', payMin: 5, payMax: 25, cooldownMs: 2000 },
