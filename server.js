@@ -119,6 +119,7 @@ const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = re
 const {
   newCharacter,
   resetCharacterKeepCosmetics,
+  resetCharacterSeasonWipe,
   doWork,
   doSlut,
   doCrime,
@@ -2070,6 +2071,20 @@ app.post('/admin/reset-all-stats', requireAuth, requireAdminPassword, (req, res)
     saveCharacter(row.id, resetCharacterKeepCosmetics(character));
   });
   res.json({ ok: true, message: `Reset stats for ${users.length} player(s). Cosmetics kept.`, cls: 'gain' });
+});
+
+// Update 4 season wipe: everyone's inventory clears except crate-won titles (Cosmetixxx crates,
+// GOOD, VISIONS, Milos Legends 1) and NMG-graded titles; every titles.owned entry (achievement
+// titles, cash-bought Cosmetixxx titles) is dropped; Farms/Crypto/Altcoins/jobs/bank/etc. reset to
+// defaults, same as /admin/reset-all-stats. The one difference: cash is not zeroed, it converts
+// down 100,000:1,000 ($100k -> $1k). One-time, irreversible -- same gate as every other admin action.
+app.post('/admin/season-wipe', requireAuth, requireAdminPassword, (req, res) => {
+  const users = getAllUsersForLeaderboard();
+  users.forEach((row) => {
+    const character = JSON.parse(row.character_json);
+    saveCharacter(row.id, resetCharacterSeasonWipe(character));
+  });
+  res.json({ ok: true, message: `Season wipe applied to ${users.length} player(s). Crate/graded titles and cash (converted 100k:1k) kept.`, cls: 'gain' });
 });
 
 app.post('/admin/inventory', requireAuth, requireAdminPassword, (req, res) => {

@@ -193,13 +193,16 @@ const GOOD_CEO_MULTIPLIER = 1.6;
 const GOOD_CEO_MIN_AVG = 95; // Regional Manager rank
 
 // Pay ranges are 10% above their original values (Drugs & Rugs balance pass -- Good Hustle pay up).
+// Pay ranges are 32% above their original values now (10% from the first Drugs & Rugs balance
+// pass, another 20% on top of that per Update 4's second Good Hustle buff). Must match JOB_RANKS
+// in mfmmoalpha/js/core.js exactly.
 const JOB_RANKS = [
-  { minAvg: 0, title: 'Trainee', payMin: 0.11, payMax: 0.55, cooldownMs: 2000 },
-  { minAvg: 15, title: 'Associate', payMin: 0.22, payMax: 0.83, cooldownMs: 1800 },
-  { minAvg: 35, title: 'Senior Associate', payMin: 0.44, payMax: 1.21, cooldownMs: 1600 },
-  { minAvg: 55, title: 'Supervisor', payMin: 0.77, payMax: 1.98, cooldownMs: 1400 },
-  { minAvg: 75, title: 'Manager', payMin: 1.27, payMax: 3.03, cooldownMs: 1200 },
-  { minAvg: 95, title: 'Regional Manager', payMin: 1.98, payMax: 4.40, cooldownMs: 1000 },
+  { minAvg: 0, title: 'Trainee', payMin: 0.132, payMax: 0.66, cooldownMs: 2000 },
+  { minAvg: 15, title: 'Associate', payMin: 0.264, payMax: 0.996, cooldownMs: 1800 },
+  { minAvg: 35, title: 'Senior Associate', payMin: 0.528, payMax: 1.452, cooldownMs: 1600 },
+  { minAvg: 55, title: 'Supervisor', payMin: 0.924, payMax: 2.376, cooldownMs: 1400 },
+  { minAvg: 75, title: 'Manager', payMin: 1.524, payMax: 3.636, cooldownMs: 1200 },
+  { minAvg: 95, title: 'Regional Manager', payMin: 2.376, payMax: 5.28, cooldownMs: 1000 },
 ];
 const BAD_JOB_RANKS = [
   { minAvg: 0, title: 'Rookie', payMin: 5, payMax: 25, cooldownMs: 2000 },
@@ -560,6 +563,28 @@ function resetCharacterKeepCosmetics(character) {
   const fresh = newCharacter(character.firstName, character.lastName);
   fresh.titles = character.titles;
   fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
+  return fresh;
+}
+
+// Season wipe (Update 4 launch): goes further than resetCharacterKeepCosmetics -- titles.owned is
+// dropped entirely too, not just carried over. Per the user's explicit rule, "Cosmetic Titles are
+// any bought from the Crates" -- those are inventory stacks (same isCosmeticInventoryId filter
+// already handles them, NMG-graded titles included), never entries in titles.owned. Everything
+// that DOES live in titles.owned (achievement titles like LOOKSMAXXER/HIGHEST_LEVEL/PEAK CIVILIAN,
+// and any cash-bought Cosmetixxx title) is "earned" or "purchased," not "cosmetic" by that
+// definition, so it does not survive. `equipped` is left as-is rather than nulled out -- the
+// client's getDisplayTitle() already checks isTitleOwned(equippedId) before rendering a badge, so
+// a stale id pointing at a wiped achievement title just renders no badge, no crash.
+// Cash is not zeroed: it converts down at a fixed 100,000:1,000 ratio (i.e. /100, rounded).
+function resetCharacterSeasonWipe(character) {
+  const fresh = newCharacter(character.firstName, character.lastName);
+  fresh.titles = {
+    owned: [],
+    equipped: character.titles.equipped,
+    customTitles: character.titles.customTitles || [],
+  };
+  fresh.inventory = (character.inventory || []).filter((stack) => isCosmeticInventoryId(stack.id));
+  fresh.cash = Math.round((character.cash || 0) / 100);
   return fresh;
 }
 
@@ -3381,6 +3406,7 @@ function generateL2Post(stock, oldPrice) {
 module.exports = {
   newCharacter,
   resetCharacterKeepCosmetics,
+  resetCharacterSeasonWipe,
   doWork,
   doSlut,
   doCrime,
