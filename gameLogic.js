@@ -3809,6 +3809,7 @@ module.exports = {
   inventoryQty,
   NMG_MAX_SLOTS,
   NMG_TIERS,
+  isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
   clampStat,
