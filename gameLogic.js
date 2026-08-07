@@ -114,55 +114,55 @@ function rollNmgGrade() {
 // title-making skill (mfmmoalpha/.claude/skills/title-making/SKILL.md) for the checklist entry to
 // keep this in sync whenever a new crate ships.
 const COSMETIXX_MARKET_TITLES = [
-  // ANIMA_CRATE_TITLES, crateCost 4500
-  { id: 'animaCommonGoku', weight: 31.67, rarity: 'common', crateCost: 4500 },
-  { id: 'animaCommonZoro', weight: 31.67, rarity: 'common', crateCost: 4500 },
-  { id: 'animaCommonHatsune', weight: 31.66, rarity: 'common', crateCost: 4500 },
-  { id: 'animaRareYujiro', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
-  { id: 'animaRareCreator', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
-  { id: 'animaRareJinwoo', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
-  { id: 'animaMegaKirito', weight: 0.075, rarity: 'rare', crateCost: 4500 },
-  { id: 'animaMegaItachi', weight: 0.075, rarity: 'rare', crateCost: 4500 },
-  { id: 'animaMegaGodGoku', weight: 0.075, rarity: 'rare', crateCost: 4500 },
-  { id: 'animaMegaLuffy', weight: 0.075, rarity: 'rare', crateCost: 4500 },
-  { id: 'animaHyperGear5', weight: 0.05, rarity: 'mythic', crateCost: 4500 },
-  { id: 'animaHyperMakima', weight: 0.05, rarity: 'mythic', crateCost: 4500 },
-  // COUNTERFINISH_CRATE_TITLES, crateCost 3000
-  { id: 'cfSafari', weight: 15, rarity: 'common', crateCost: 3000 },
-  { id: 'cfTiger', weight: 15, rarity: 'common', crateCost: 3000 },
-  { id: 'cfTronic', weight: 15, rarity: 'common', crateCost: 3000 },
-  { id: 'cfFree', weight: 15, rarity: 'common', crateCost: 3000 },
-  { id: 'cfLore', weight: 15, rarity: 'uncommon', crateCost: 3000 },
-  { id: 'cfHowl', weight: 15, rarity: 'uncommon', crateCost: 3000 },
-  { id: 'cfFade', weight: 15, rarity: 'uncommon', crateCost: 3000 },
-  { id: 'cfSapphire', weight: 1.5, rarity: 'rare', crateCost: 3000 },
-  { id: 'cfRuby', weight: 1.5, rarity: 'rare', crateCost: 3000 },
-  { id: 'cfEmerald', weight: 1.5, rarity: 'rare', crateCost: 3000 },
-  { id: 'cfHyperSapphire', weight: 0.17, rarity: 'mythic', crateCost: 3000 },
-  { id: 'cfHyperRuby', weight: 0.17, rarity: 'mythic', crateCost: 3000 },
-  { id: 'cfHyperEmerald', weight: 0.16, rarity: 'mythic', crateCost: 3000 },
-  // RED_CRATE_TITLES, crateCost 20000
-  { id: 'redTrumpFistUp', weight: 5, rarity: 'mythic', crateCost: 20000 },
-  { id: 'redTrump', weight: 6.67, rarity: 'rare', crateCost: 20000 },
-  { id: 'redBush', weight: 6.67, rarity: 'rare', crateCost: 20000 },
-  { id: 'redRegan', weight: 6.66, rarity: 'rare', crateCost: 20000 },
-  { id: 'redNixon', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'redMcconel', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'redDesantis', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'redMtg', weight: 15, rarity: 'common', crateCost: 20000 },
-  { id: 'redLoomer', weight: 15, rarity: 'common', crateCost: 20000 },
-  { id: 'redCruz', weight: 15, rarity: 'common', crateCost: 20000 },
-  // BLUE_CRATE_TITLES, crateCost 20000
-  { id: 'blueDarkBrandon', weight: 5, rarity: 'mythic', crateCost: 20000 },
-  { id: 'blueBiden', weight: 6.67, rarity: 'rare', crateCost: 20000 },
-  { id: 'blueObama', weight: 6.67, rarity: 'rare', crateCost: 20000 },
-  { id: 'blueJfk', weight: 6.66, rarity: 'rare', crateCost: 20000 },
-  { id: 'blueHarris', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'blueCarter', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'blueClinton', weight: 10, rarity: 'uncommon', crateCost: 20000 },
-  { id: 'blueNewsome', weight: 15, rarity: 'common', crateCost: 20000 },
-  { id: 'blueBernie', weight: 15, rarity: 'common', crateCost: 20000 },
-  { id: 'blueAoc', weight: 15, rarity: 'common', crateCost: 20000 },
+  // ANIMA_CRATE_TITLES, crateCost 4500 -- ARCHIVED (no longer purchasable anywhere else)
+  { id: 'animaCommonGoku', weight: 31.67, rarity: 'common', crateCost: 4500, archived: true },
+  { id: 'animaCommonZoro', weight: 31.67, rarity: 'common', crateCost: 4500, archived: true },
+  { id: 'animaCommonHatsune', weight: 31.66, rarity: 'common', crateCost: 4500, archived: true },
+  { id: 'animaRareYujiro', weight: 1.5, rarity: 'uncommon', crateCost: 4500, archived: true },
+  { id: 'animaRareCreator', weight: 1.5, rarity: 'uncommon', crateCost: 4500, archived: true },
+  { id: 'animaRareJinwoo', weight: 1.5, rarity: 'uncommon', crateCost: 4500, archived: true },
+  { id: 'animaMegaKirito', weight: 0.075, rarity: 'rare', crateCost: 4500, archived: true },
+  { id: 'animaMegaItachi', weight: 0.075, rarity: 'rare', crateCost: 4500, archived: true },
+  { id: 'animaMegaGodGoku', weight: 0.075, rarity: 'rare', crateCost: 4500, archived: true },
+  { id: 'animaMegaLuffy', weight: 0.075, rarity: 'rare', crateCost: 4500, archived: true },
+  { id: 'animaHyperGear5', weight: 0.05, rarity: 'mythic', crateCost: 4500, archived: true },
+  { id: 'animaHyperMakima', weight: 0.05, rarity: 'mythic', crateCost: 4500, archived: true },
+  // COUNTERFINISH_CRATE_TITLES, crateCost 3000 -- ARCHIVED
+  { id: 'cfSafari', weight: 15, rarity: 'common', crateCost: 3000, archived: true },
+  { id: 'cfTiger', weight: 15, rarity: 'common', crateCost: 3000, archived: true },
+  { id: 'cfTronic', weight: 15, rarity: 'common', crateCost: 3000, archived: true },
+  { id: 'cfFree', weight: 15, rarity: 'common', crateCost: 3000, archived: true },
+  { id: 'cfLore', weight: 15, rarity: 'uncommon', crateCost: 3000, archived: true },
+  { id: 'cfHowl', weight: 15, rarity: 'uncommon', crateCost: 3000, archived: true },
+  { id: 'cfFade', weight: 15, rarity: 'uncommon', crateCost: 3000, archived: true },
+  { id: 'cfSapphire', weight: 1.5, rarity: 'rare', crateCost: 3000, archived: true },
+  { id: 'cfRuby', weight: 1.5, rarity: 'rare', crateCost: 3000, archived: true },
+  { id: 'cfEmerald', weight: 1.5, rarity: 'rare', crateCost: 3000, archived: true },
+  { id: 'cfHyperSapphire', weight: 0.17, rarity: 'mythic', crateCost: 3000, archived: true },
+  { id: 'cfHyperRuby', weight: 0.17, rarity: 'mythic', crateCost: 3000, archived: true },
+  { id: 'cfHyperEmerald', weight: 0.16, rarity: 'mythic', crateCost: 3000, archived: true },
+  // RED_CRATE_TITLES, crateCost 20000 -- ARCHIVED (1,000-supply limited drop, long exhausted)
+  { id: 'redTrumpFistUp', weight: 5, rarity: 'mythic', crateCost: 20000, archived: true },
+  { id: 'redTrump', weight: 6.67, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'redBush', weight: 6.67, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'redRegan', weight: 6.66, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'redNixon', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'redMcconel', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'redDesantis', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'redMtg', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
+  { id: 'redLoomer', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
+  { id: 'redCruz', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
+  // BLUE_CRATE_TITLES, crateCost 20000 -- ARCHIVED (1,000-supply limited drop, long exhausted)
+  { id: 'blueDarkBrandon', weight: 5, rarity: 'mythic', crateCost: 20000, archived: true },
+  { id: 'blueBiden', weight: 6.67, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'blueObama', weight: 6.67, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'blueJfk', weight: 6.66, rarity: 'rare', crateCost: 20000, archived: true },
+  { id: 'blueHarris', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'blueCarter', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'blueClinton', weight: 10, rarity: 'uncommon', crateCost: 20000, archived: true },
+  { id: 'blueNewsome', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
+  { id: 'blueBernie', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
+  { id: 'blueAoc', weight: 15, rarity: 'common', crateCost: 20000, archived: true },
   // LEEMS_LARUDO_GOOD_TITLES, crateCost 20000
   { id: 'llgSkyCommon', weight: 19.475, rarity: 'common', crateCost: 20000 },
   { id: 'llgSkyRegistered', weight: 19.475, rarity: 'common', crateCost: 20000 },
@@ -203,7 +203,15 @@ const COSMETIXX_MARKET_GRADE_MULT = {
   10: 3.5, // Elite
 };
 const COSMETIXX_MARKET_MIN_PRICE = 500;
-const COSMETIXX_MARKET_MAX_PRICE = 1500000; // safety clamp, not expected to bind in normal play
+const COSMETIXX_MARKET_MAX_PRICE = 1500000; // safety clamp for active-collection titles
+// Archived titles (Anima, Counterfinish, RED, BLUE -- see the `archived: true` flag above) can
+// never be pulled from a crate again, only through this store. Without a real premium, "buy a cheap
+// slab here + Crack a Title ($50,000, see doCrackTitle) to get back an equippable copy" would be a
+// backdoor around a crate being archived -- effectively unarchiving it. 10x makes that backdoor
+// expensive on top of the crack cost instead of a cheap shortcut, and the ceiling is raised to match
+// since we WANT high-end archived slabs pricier than the normal cap.
+const COSMETIXX_MARKET_ARCHIVED_MULT = 10;
+const COSMETIXX_MARKET_ARCHIVED_MAX_PRICE = 3000000;
 
 // sqrt(baseline/weight) scales price by a title's REAL pull rarity rather than its rarity label --
 // cross-crate labels are inconsistent (RED/BLUE's "mythic" Presidential Rare is a 5% pull; Anima/
@@ -211,9 +219,11 @@ const COSMETIXX_MARKET_MAX_PRICE = 1500000; // safety clamp, not expected to bin
 // title doesn't blow up to an absurd raw-inverse-probability price.
 function cosmetixxSlabPrice(title, grade) {
   const rarityFactor = Math.sqrt(COSMETIXX_MARKET_BASELINE_WEIGHT / title.weight);
-  const raw = title.crateCost * rarityFactor * COSMETIXX_MARKET_GRADE_MULT[grade];
+  const archivedMult = title.archived ? COSMETIXX_MARKET_ARCHIVED_MULT : 1;
+  const raw = title.crateCost * rarityFactor * COSMETIXX_MARKET_GRADE_MULT[grade] * archivedMult;
   const rounded = Math.round(raw / 100) * 100;
-  return Math.min(COSMETIXX_MARKET_MAX_PRICE, Math.max(COSMETIXX_MARKET_MIN_PRICE, rounded));
+  const max = title.archived ? COSMETIXX_MARKET_ARCHIVED_MAX_PRICE : COSMETIXX_MARKET_MAX_PRICE;
+  return Math.min(max, Math.max(COSMETIXX_MARKET_MIN_PRICE, rounded));
 }
 
 // Sampling without replacement -- the pool (60+ titles) is large relative to 5 picks, so a simple
