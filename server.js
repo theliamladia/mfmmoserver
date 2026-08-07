@@ -2341,6 +2341,17 @@ app.post('/admin/nmg-fast-forward-all', requireAuth, requireAdminPassword, (req,
   res.json({ ok: true, message: `Fast-forwarded ${count} pending grading slot(s) to ready.` });
 });
 
+// Regen is normally lazy (only triggered by the next /cosmetixx-market/state request once the 24h
+// timer expires) and never retroactive -- a rotation already live when a pricing change deploys
+// keeps its old prices until it naturally rotates. This forces an immediate regeneration with
+// current pricing/catalog logic instead of waiting out the rest of the 24h window.
+app.post('/admin/cosmetixx-market-regen', requireAuth, requireAdminPassword, (req, res) => {
+  const now = Date.now();
+  tryClaimCosmetixxMarketRegen(now, now + 1); // +1 guarantees the claim succeeds regardless of current timestamp
+  replaceCosmetixxMarketSlots(generateCosmetixxMarketSlots());
+  res.json({ ok: true, message: 'CosmetixxMarket regenerated with 5 new slabs.' });
+});
+
 // Every player's Bank/Cold Storage balances in one list -- read-only, admin-only. Reuses
 // getAllUsersForLeaderboard (already just {id, username, character_json} for every user) rather
 // than adding a new bespoke query, same as /admin/reset-all-stats above.
