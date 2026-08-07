@@ -38,6 +38,12 @@ const {
   getCrateStock,
   trySpendCrateStock,
   refundCrateStock,
+  tryClaimCosmetixxMarketRegen,
+  getCosmetixxMarketGeneratedAt,
+  getCosmetixxMarketSlots,
+  replaceCosmetixxMarketSlots,
+  getCosmetixxMarketSlotById,
+  trySellCosmetixxMarketSlot,
   createChatMessage,
   getRecentChatMessages,
   seedStocksIfEmpty,
@@ -213,6 +219,8 @@ const {
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
+  COSMETIXX_MARKET_ROTATION_MS,
+  generateCosmetixxMarketSlots,
   LEADERBOARD_TITLES,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
@@ -1437,6 +1445,57 @@ app.post('/nmg/reveal', requireAuth, (req, res) => {
   saveCharacter(user.id, character);
 
   res.json({ ok: true, character, result: { baseTitleId: row.title_id, gradedId, grade } });
+});
+
+// ---------- CosmetixxMarket ----------
+// Lazy 24h regen, same "check-and-claim on the next relevant request, no cron job" idiom used
+// everywhere else server-side (pause/maintenance checks, the Milos heartbeat, etc).
+app.get('/cosmetixx-market/state', requireAuth, (req, res) => {
+  const now = Date.now();
+  const staleBefore = now - COSMETIXX_MARKET_ROTATION_MS;
+  if (tryClaimCosmetixxMarketRegen(now, staleBefore)) {
+    replaceCosmetixxMarketSlots(generateCosmetixxMarketSlots());
+  }
+  const slots = getCosmetixxMarketSlots().map((row) => ({
+    id: row.id,
+    slotIndex: row.slot_index,
+    titleId: row.title_id,
+    grade: row.grade,
+    price: row.price,
+    sold: !!row.sold,
+  }));
+  res.json({ ok: true, slots, nextRotationAt: getCosmetixxMarketGeneratedAt() + COSMETIXX_MARKET_ROTATION_MS });
+});
+
+app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { slotId } = req.body || {};
+  const row = getCosmetixxMarketSlotById(slotId);
+  if (!row || row.sold) return res.status(404).json({ ok: false, reason: 'That slab is no longer available.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+  if (character.cash < row.price) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  // Checked cash BEFORE claiming the slot above -- a lost race here never needs a cash rollback,
+  // unlike the RED/BLUE crate's reserve-then-refund flow.
+  if (!trySellCosmetixxMarketSlot(row.id, req.user.sub)) {
+    return res.status(409).json({ ok: false, reason: 'Someone already bought that slab.' });
+  }
+
+  const cashBefore = character.cash;
+  character.cash = round2(character.cash - row.price);
+  const gradedId = `${row.title_id}_nmg${row.grade}`;
+  addToInventory(character, gradedId, 1);
+
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'cosmetixxMarket/buy', round2(character.cash - cashBefore), character.cash);
+  saveCharacter(user.id, character);
+
+  res.json({ ok: true, character, result: { gradedId, price: row.price } });
 });
 
 app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork));

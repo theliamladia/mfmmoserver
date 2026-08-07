@@ -135,6 +135,71 @@ function refundCrateStock(crateKey, qty) {
   db.prepare(`UPDATE server_state SET ${col} = ${col} + ? WHERE id = 1`).run(qty);
 }
 
+// CosmetixxMarket: 5 system-generated graded-title slabs, shared across every player, that rotate
+// every 24h. cosmetixx_market_generated_at is the same "reserve/claim via a conditional UPDATE"
+// idiom as red/blue_crate_remaining above, just gating a timestamp instead of a quantity.
+['cosmetixx_market_generated_at'].forEach((col) => {
+  const has = db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === col);
+  if (!has) {
+    db.exec(`ALTER TABLE server_state ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
+  }
+});
+
+// Whichever request's regen check lands when generated_at is stale "wins" the right to regenerate
+// -- the WHERE guard means only one concurrent caller can ever see changes > 0, so a spike of
+// simultaneous requests right at the 24h boundary can't trigger multiple regenerations.
+function tryClaimCosmetixxMarketRegen(now, staleBefore) {
+  const result = db
+    .prepare('UPDATE server_state SET cosmetixx_market_generated_at = ? WHERE id = 1 AND cosmetixx_market_generated_at <= ?')
+    .run(now, staleBefore);
+  return result.changes > 0;
+}
+
+function getCosmetixxMarketGeneratedAt() {
+  return db.prepare('SELECT cosmetixx_market_generated_at FROM server_state WHERE id = 1').get().cosmetixx_market_generated_at;
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cosmetixx_market_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slot_index INTEGER NOT NULL,
+    title_id TEXT NOT NULL,
+    grade INTEGER NOT NULL,
+    price INTEGER NOT NULL,
+    sold INTEGER NOT NULL DEFAULT 0,
+    sold_to_user_id INTEGER
+  );
+`);
+
+function getCosmetixxMarketSlots() {
+  return db.prepare('SELECT * FROM cosmetixx_market_slots ORDER BY slot_index').all();
+}
+
+// Only called by whichever request won tryClaimCosmetixxMarketRegen above.
+function replaceCosmetixxMarketSlots(slots) {
+  const insert = db.prepare(
+    'INSERT INTO cosmetixx_market_slots (slot_index, title_id, grade, price) VALUES (?, ?, ?, ?)'
+  );
+  const tx = db.transaction((rows) => {
+    db.prepare('DELETE FROM cosmetixx_market_slots').run();
+    rows.forEach((s) => insert.run(s.slotIndex, s.titleId, s.grade, s.price));
+  });
+  tx(slots);
+}
+
+function getCosmetixxMarketSlotById(id) {
+  return db.prepare('SELECT * FROM cosmetixx_market_slots WHERE id = ?').get(id);
+}
+
+// Same atomic-conditional-UPDATE pattern as trySpendCrateStock -- changes > 0 means this caller won
+// the race to buy this exact slot.
+function trySellCosmetixxMarketSlot(id, userId) {
+  const result = db
+    .prepare('UPDATE cosmetixx_market_slots SET sold = 1, sold_to_user_id = ? WHERE id = ? AND sold = 0')
+    .run(userId, id);
+  return result.changes > 0;
+}
+
 // Milos Trading Network: a real shared table (unlike everything else, which lives inside a single
 // user's character_json) since a listing must be visible to every player, not just its seller.
 db.exec(`
@@ -1105,6 +1170,12 @@ module.exports = {
   getCrateStock,
   trySpendCrateStock,
   refundCrateStock,
+  tryClaimCosmetixxMarketRegen,
+  getCosmetixxMarketGeneratedAt,
+  getCosmetixxMarketSlots,
+  replaceCosmetixxMarketSlots,
+  getCosmetixxMarketSlotById,
+  trySellCosmetixxMarketSlot,
   createChatMessage,
   getRecentChatMessages,
   seedStocksIfEmpty,

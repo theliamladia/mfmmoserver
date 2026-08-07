@@ -105,6 +105,146 @@ function rollNmgGrade() {
   return 1;
 }
 
+// ---------- CosmetixxMarket ----------
+// Mirrors mfmmoalpha/js/core.js's rarity-bearing catalogs (id/weight/rarity only, tagged with the
+// parent crate's cost) -- EXCLUDING the two archived collections (Open Beta, GOOD Season 1) and the
+// two RED/BLUE hidden Auto pulls (no independent weight, not directly drawable, so no fair way to
+// price them). Needed only for this feature's random generation + pricing -- the server otherwise
+// deliberately has no title catalog of its own (see isCosmeticInventoryId below). See the
+// title-making skill (mfmmoalpha/.claude/skills/title-making/SKILL.md) for the checklist entry to
+// keep this in sync whenever a new crate ships.
+const COSMETIXX_MARKET_TITLES = [
+  // ANIMA_CRATE_TITLES, crateCost 4500
+  { id: 'animaCommonGoku', weight: 31.67, rarity: 'common', crateCost: 4500 },
+  { id: 'animaCommonZoro', weight: 31.67, rarity: 'common', crateCost: 4500 },
+  { id: 'animaCommonHatsune', weight: 31.66, rarity: 'common', crateCost: 4500 },
+  { id: 'animaRareYujiro', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
+  { id: 'animaRareCreator', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
+  { id: 'animaRareJinwoo', weight: 1.5, rarity: 'uncommon', crateCost: 4500 },
+  { id: 'animaMegaKirito', weight: 0.075, rarity: 'rare', crateCost: 4500 },
+  { id: 'animaMegaItachi', weight: 0.075, rarity: 'rare', crateCost: 4500 },
+  { id: 'animaMegaGodGoku', weight: 0.075, rarity: 'rare', crateCost: 4500 },
+  { id: 'animaMegaLuffy', weight: 0.075, rarity: 'rare', crateCost: 4500 },
+  { id: 'animaHyperGear5', weight: 0.05, rarity: 'mythic', crateCost: 4500 },
+  { id: 'animaHyperMakima', weight: 0.05, rarity: 'mythic', crateCost: 4500 },
+  // COUNTERFINISH_CRATE_TITLES, crateCost 3000
+  { id: 'cfSafari', weight: 15, rarity: 'common', crateCost: 3000 },
+  { id: 'cfTiger', weight: 15, rarity: 'common', crateCost: 3000 },
+  { id: 'cfTronic', weight: 15, rarity: 'common', crateCost: 3000 },
+  { id: 'cfFree', weight: 15, rarity: 'common', crateCost: 3000 },
+  { id: 'cfLore', weight: 15, rarity: 'uncommon', crateCost: 3000 },
+  { id: 'cfHowl', weight: 15, rarity: 'uncommon', crateCost: 3000 },
+  { id: 'cfFade', weight: 15, rarity: 'uncommon', crateCost: 3000 },
+  { id: 'cfSapphire', weight: 1.5, rarity: 'rare', crateCost: 3000 },
+  { id: 'cfRuby', weight: 1.5, rarity: 'rare', crateCost: 3000 },
+  { id: 'cfEmerald', weight: 1.5, rarity: 'rare', crateCost: 3000 },
+  { id: 'cfHyperSapphire', weight: 0.17, rarity: 'mythic', crateCost: 3000 },
+  { id: 'cfHyperRuby', weight: 0.17, rarity: 'mythic', crateCost: 3000 },
+  { id: 'cfHyperEmerald', weight: 0.16, rarity: 'mythic', crateCost: 3000 },
+  // RED_CRATE_TITLES, crateCost 20000
+  { id: 'redTrumpFistUp', weight: 5, rarity: 'mythic', crateCost: 20000 },
+  { id: 'redTrump', weight: 6.67, rarity: 'rare', crateCost: 20000 },
+  { id: 'redBush', weight: 6.67, rarity: 'rare', crateCost: 20000 },
+  { id: 'redRegan', weight: 6.66, rarity: 'rare', crateCost: 20000 },
+  { id: 'redNixon', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'redMcconel', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'redDesantis', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'redMtg', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'redLoomer', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'redCruz', weight: 15, rarity: 'common', crateCost: 20000 },
+  // BLUE_CRATE_TITLES, crateCost 20000
+  { id: 'blueDarkBrandon', weight: 5, rarity: 'mythic', crateCost: 20000 },
+  { id: 'blueBiden', weight: 6.67, rarity: 'rare', crateCost: 20000 },
+  { id: 'blueObama', weight: 6.67, rarity: 'rare', crateCost: 20000 },
+  { id: 'blueJfk', weight: 6.66, rarity: 'rare', crateCost: 20000 },
+  { id: 'blueHarris', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'blueCarter', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'blueClinton', weight: 10, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'blueNewsome', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'blueBernie', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'blueAoc', weight: 15, rarity: 'common', crateCost: 20000 },
+  // LEEMS_LARUDO_GOOD_TITLES, crateCost 20000
+  { id: 'llgSkyCommon', weight: 19.475, rarity: 'common', crateCost: 20000 },
+  { id: 'llgSkyRegistered', weight: 19.475, rarity: 'common', crateCost: 20000 },
+  { id: 'llgGRegistered', weight: 19.475, rarity: 'common', crateCost: 20000 },
+  { id: 'llgHappy', weight: 19.475, rarity: 'common', crateCost: 20000 },
+  { id: 'llgRegisteredSkyAlt', weight: 8, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'llgHappyAlt', weight: 8, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'llgRegisteredAlt', weight: 3, rarity: 'rare', crateCost: 20000 },
+  { id: 'llgTypeface', weight: 3, rarity: 'rare', crateCost: 20000 },
+  { id: 'llgImpossible', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  { id: 'llgSpecialFont', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  // MILOS_LEGENDS_TITLES, crateCost 20000
+  { id: 'mlConnie', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'mlEliteUnit', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'mlMrSerious', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'mlOtaku', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'mlPileit', weight: 15, rarity: 'common', crateCost: 20000 },
+  { id: 'mlKhylil', weight: 8.3, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'mlHawken', weight: 8.3, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'mlSuperjailWarden', weight: 8.3, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'mlSpecialUnit', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  { id: 'mlKrogger', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+];
+
+const COSMETIXX_MARKET_SLOT_COUNT = 5;
+const COSMETIXX_MARKET_ROTATION_MS = 24 * 60 * 60 * 1000;
+
+// A "common" title's typical weight -- the 1x pricing reference point.
+const COSMETIXX_MARKET_BASELINE_WEIGHT = 15;
+// Ascending by grade NUMBER, not the grade's own pull weight -- NMG_GRADE_WEIGHTS makes grade 1
+// almost as statistically rare as grade 10 (1% vs 2%), but grade 1 (Sub) is the worst outcome
+// narratively, so pricing it above grade 10 (Elite) would read as backwards.
+const COSMETIXX_MARKET_GRADE_MULT = {
+  1: 0.4, 2: 0.45, 3: 0.5, // Sub
+  4: 0.7, 5: 0.85, 6: 1, 7: 1.2, // Worn
+  8: 1.7, // Good
+  9: 2.4, // Mint
+  10: 3.5, // Elite
+};
+const COSMETIXX_MARKET_MIN_PRICE = 500;
+const COSMETIXX_MARKET_MAX_PRICE = 1500000; // safety clamp, not expected to bind in normal play
+
+// sqrt(baseline/weight) scales price by a title's REAL pull rarity rather than its rarity label --
+// cross-crate labels are inconsistent (RED/BLUE's "mythic" Presidential Rare is a 5% pull; Anima/
+// LLG/Milos Legends "mythic" is 0.05%, 100x rarer) -- dampened by the square root so a 0.05%-weight
+// title doesn't blow up to an absurd raw-inverse-probability price.
+function cosmetixxSlabPrice(title, grade) {
+  const rarityFactor = Math.sqrt(COSMETIXX_MARKET_BASELINE_WEIGHT / title.weight);
+  const raw = title.crateCost * rarityFactor * COSMETIXX_MARKET_GRADE_MULT[grade];
+  const rounded = Math.round(raw / 100) * 100;
+  return Math.min(COSMETIXX_MARKET_MAX_PRICE, Math.max(COSMETIXX_MARKET_MIN_PRICE, rounded));
+}
+
+// Sampling without replacement -- the pool (60+ titles) is large relative to 5 picks, so a simple
+// retry-on-duplicate loop converges immediately in practice rather than needing a real shuffle.
+function pickDistinctCosmetixxTitles(count) {
+  const picked = [];
+  const usedIds = new Set();
+  let guard = 0;
+  while (picked.length < count && guard < count * 50) {
+    guard += 1;
+    const total = COSMETIXX_MARKET_TITLES.reduce((sum, t) => sum + t.weight, 0);
+    let r = Math.random() * total;
+    let chosen = COSMETIXX_MARKET_TITLES[0];
+    for (const t of COSMETIXX_MARKET_TITLES) {
+      if (r < t.weight) { chosen = t; break; }
+      r -= t.weight;
+    }
+    if (usedIds.has(chosen.id)) continue;
+    usedIds.add(chosen.id);
+    picked.push(chosen);
+  }
+  return picked;
+}
+
+function generateCosmetixxMarketSlots() {
+  return pickDistinctCosmetixxTitles(COSMETIXX_MARKET_SLOT_COUNT).map((title, slotIndex) => {
+    const grade = rollNmgGrade();
+    return { slotIndex, titleId: title.id, grade, price: cosmetixxSlabPrice(title, grade) };
+  });
+}
+
 const PISTOL_ITEMS_BY_ID = {
   glock19: { id: 'glock19', name: '🔫 Glock 19', type: 'pistol', caliber: '9mm', cost: 500, atkBonus: 6 },
   m9: { id: 'm9', name: '🔫 Beretta M9', type: 'pistol', caliber: '9mm', cost: 650, atkBonus: 7 },
@@ -3812,6 +3952,9 @@ module.exports = {
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
+  COSMETIXX_MARKET_SLOT_COUNT,
+  COSMETIXX_MARKET_ROTATION_MS,
+  generateCosmetixxMarketSlots,
   clampStat,
   NPC_TYPES,
   COOLDOWN_MS,
