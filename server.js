@@ -286,7 +286,14 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : ['https://mfmmo.com', 'https://www.mfmmo.com'];
 
-app.use(cors({ origin: ALLOWED_ORIGINS }));
+// credentials: true is required for navigator.sendBeacon's tab-close/background flush
+// (flushCharacterSyncBeacon in mfmmoalpha's js/core.js) -- sendBeacon always sends cross-origin
+// requests with implicit credentials, which triggers a CORS preflight since the beacon body is
+// JSON, and without this flag the browser blocks that preflight outright (no
+// Access-Control-Allow-Credentials header to satisfy it), silently failing the beacon every time.
+// The client's normal fetch-based requests still authenticate via an Authorization header, not
+// cookies, so this doesn't change how those work -- it only unblocks the beacon path.
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json());
 
 // Auto-attaches the caller's current character_rev to any response that includes a `character` --
