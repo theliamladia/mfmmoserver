@@ -210,7 +210,7 @@ const {
   inventoryQty,
   NMG_MAX_SLOTS,
   NMG_TIERS,
-  NMG_ELIGIBLE_BASE_TITLE_IDS,
+  isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
   LEADERBOARD_TITLES,
@@ -1383,7 +1383,13 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   if (active.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: 'All 4 grading slots are full.' });
 
   const baseId = nmgBaseIdOf(stackId);
-  if (!NMG_ELIGIBLE_BASE_TITLE_IDS.has(baseId)) return res.status(400).json({ ok: false, reason: 'This title cannot be graded.' });
+  // Every title is gradeable -- the server has no title catalog of its own (see
+  // isCosmeticInventoryId), so "not a known non-title equipment id" (gun/melee/ammo/armor/wrestling
+  // gear/drug) is the only thing that's actually checkable here, and is permissive-by-default for
+  // any current or future title/crate instead of needing a manually maintained allowlist (which had
+  // already missed two real crates -- Milos Legends and Leems Larudo x GOOD -- by the time this was
+  // caught).
+  if (!isCosmeticInventoryId(baseId)) return res.status(400).json({ ok: false, reason: 'This title cannot be graded.' });
   if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that title." });
   if (character.cash < tierDef.cost) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
 

@@ -74,32 +74,6 @@ const NMG_TIERS = {
   '10min': { cost: 20000, ms: 10 * 60 * 1000 },
 };
 
-// The server has no title/rarity catalog of its own (titles are otherwise entirely client-known/
-// trust-based, see characterOwnsTitle below) -- this Set is the one place gradeable titles must be
-// explicitly, manually mirrored from mfmmoalpha/js/core.js's rarity-bearing catalogs (BETA_SPIN_
-// TITLES, GOOD_SEASON1_TITLES, ANIMA_CRATE_TITLES, COUNTERFINISH_CRATE_TITLES, RED_CRATE_TITLES,
-// BLUE_CRATE_TITLES, RED_BLUE_HIDDEN_TITLES). Every new title catalog shipped client-side needs a
-// matching update here, or its titles simply stay un-gradeable (fails safe, never permissive).
-const NMG_ELIGIBLE_BASE_TITLE_IDS = new Set([
-  // BETA_SPIN_TITLES
-  'betaSpin2026', 'betaSpin2k26', 'betaSpinTester', 'betaSpinOpen',
-  // GOOD_SEASON1_TITLES
-  'gs1CommonA', 'gs1CommonB', 'gs1Uncommon', 'gs1RareFull', 'gs1RareGewd', 'gs1Mythic', 'gs1Common2', 'gs1RareBless',
-  // ANIMA_CRATE_TITLES
-  'animaCommonGoku', 'animaCommonZoro', 'animaCommonHatsune', 'animaRareYujiro', 'animaRareCreator',
-  'animaRareJinwoo', 'animaMegaKirito', 'animaMegaItachi', 'animaMegaGodGoku', 'animaMegaLuffy',
-  'animaHyperGear5', 'animaHyperMakima',
-  // COUNTERFINISH_CRATE_TITLES
-  'cfSafari', 'cfTiger', 'cfTronic', 'cfFree', 'cfLore', 'cfHowl', 'cfFade', 'cfSapphire', 'cfRuby',
-  'cfEmerald', 'cfHyperSapphire', 'cfHyperRuby', 'cfHyperEmerald',
-  // RED_CRATE_TITLES
-  'redTrumpFistUp', 'redTrump', 'redBush', 'redRegan', 'redNixon', 'redMcconel', 'redDesantis', 'redMtg', 'redLoomer', 'redCruz',
-  // BLUE_CRATE_TITLES
-  'blueDarkBrandon', 'blueBiden', 'blueObama', 'blueJfk', 'blueHarris', 'blueCarter', 'blueClinton', 'blueNewsome', 'blueBernie', 'blueAoc',
-  // RED_BLUE_HIDDEN_TITLES
-  'redTrumpAuto', 'blueBidenAuto',
-]);
-
 // Same convention as the client's PRESTIGE_ID_RE (mfmmoalpha/js/core.js:561) -- duplicated here
 // since the server shares no code with the client -- so a prestiged stack (e.g. `cfHyperSapphire_p2`)
 // unwraps to its base id before the eligibility check above.
@@ -3835,7 +3809,6 @@ module.exports = {
   inventoryQty,
   NMG_MAX_SLOTS,
   NMG_TIERS,
-  NMG_ELIGIBLE_BASE_TITLE_IDS,
   nmgBaseIdOf,
   rollNmgGrade,
   clampStat,
