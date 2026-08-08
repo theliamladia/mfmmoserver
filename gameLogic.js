@@ -25,6 +25,16 @@ const CRIME_STAT_MITIGATION = 0.5;
 const COMMUNITY_SERVICE_COOLDOWN_MS = 60000;
 const COMMUNITY_SERVICE_BASE_COST = 750;
 const COMMUNITY_SERVICE_STREAK_REDUCTION = 4;
+// Was flat-linear (base * (1+streak)) -- a repeat offender's cost per streak point never got any
+// worse than their first. This second factor makes the cost curve steeper the higher your pending
+// punitive sentence (crimeRecord.streak, which lengthens every future jail sentence) already is, so
+// washing away a heavily escalated record costs proportionally more, not just more in step with it.
+// Unchanged at streak=0 (factor is exactly 1 there) -- only kicks in once you actually have a record.
+const COMMUNITY_SERVICE_ESCALATION_RATE = 0.15;
+
+function communityServiceCost(streak) {
+  return Math.round(COMMUNITY_SERVICE_BASE_COST * (1 + streak) * (1 + streak * COMMUNITY_SERVICE_ESCALATION_RATE));
+}
 
 const GYM_BURN_LBS = 0.5;
 const GYM_COST = 20;
@@ -367,11 +377,16 @@ const FOOD_ITEMS_BY_ID = {
   primerib: { id: 'primerib', name: '🥩 Prime Rib', cost: 30, calories: 1200 },
 };
 
+// Rebalanced (was too easy to exploit -- spamming small qty=1 sales kept per-transaction risk/jail
+// time flat forever, since jailYearsPerUnit*qty never accounted for how much you'd already sold).
+// wholesaleCost +25%, sellMin/sellMax -10% -- both squeeze margin from opposite ends instead of
+// just one big number, and jail time now also escalates with lifetime units sold (see
+// drugJailEscalationMultiplier below), so grinding small sales no longer stays low-risk forever.
 const DRUG_ITEMS_BY_ID = {
-  drugWeed: { id: 'drugWeed', name: '🌿 Weed', type: 'drug', wholesaleCost: 20, sellMin: 30, sellMax: 50, jailYearsPerUnit: 0.2, riskBase: 0.05, riskPerUnit: 0.02 },
-  drugPills: { id: 'drugPills', name: '💊 Pills', type: 'drug', wholesaleCost: 60, sellMin: 90, sellMax: 140, jailYearsPerUnit: 0.5, riskBase: 0.12, riskPerUnit: 0.03 },
-  drugMeth: { id: 'drugMeth', name: '🧪 Meth', type: 'drug', wholesaleCost: 100, sellMin: 160, sellMax: 260, jailYearsPerUnit: 1.5, riskBase: 0.25, riskPerUnit: 0.05 },
-  drugCoke: { id: 'drugCoke', name: '❄️ Cocaine', type: 'drug', wholesaleCost: 150, sellMin: 220, sellMax: 320, jailYearsPerUnit: 1, riskBase: 0.2, riskPerUnit: 0.04 },
+  drugWeed: { id: 'drugWeed', name: '🌿 Weed', type: 'drug', wholesaleCost: 25, sellMin: 27, sellMax: 45, jailYearsPerUnit: 0.2, riskBase: 0.05, riskPerUnit: 0.02 },
+  drugPills: { id: 'drugPills', name: '💊 Pills', type: 'drug', wholesaleCost: 75, sellMin: 81, sellMax: 126, jailYearsPerUnit: 0.5, riskBase: 0.12, riskPerUnit: 0.03 },
+  drugMeth: { id: 'drugMeth', name: '🧪 Meth', type: 'drug', wholesaleCost: 125, sellMin: 144, sellMax: 234, jailYearsPerUnit: 1.5, riskBase: 0.25, riskPerUnit: 0.05 },
+  drugCoke: { id: 'drugCoke', name: '❄️ Cocaine', type: 'drug', wholesaleCost: 190, sellMin: 198, sellMax: 288, jailYearsPerUnit: 1, riskBase: 0.2, riskPerUnit: 0.04 },
 };
 
 // Unlock thresholds are 10x their original values (Drugs & Rugs: makes clearing a dealer -- and
@@ -1667,6 +1682,22 @@ function drugSellRiskChance(character, drug, qty) {
   return Math.max(DRUG_SELL_RISK_MIN, baseRisk - reduction);
 }
 
+// The exploit: jail time used to be purely `jailYearsPerUnit * qty` for THIS transaction, with no
+// memory of past sales -- spamming qty=1 sales kept the sentence flat and cheap forever no matter
+// how much you'd sold lifetime. Ties the sentence to character.drugDealer.unitsSold (already
+// tracked for dealer-unlock thresholds) instead: every 100 lifetime units sold adds another 25% to
+// the jail time you get if busted, capped at 6x so it stays severe without being absurd for the
+// highest-volume grinders (dmitri's own unlock threshold is 2,000 units).
+const DRUG_JAIL_ESCALATION_STEP_UNITS = 100;
+const DRUG_JAIL_ESCALATION_PER_STEP = 0.25;
+const DRUG_JAIL_ESCALATION_MAX_MULT = 6;
+
+function drugJailEscalationMultiplier(character) {
+  const unitsSold = (character.drugDealer && character.drugDealer.unitsSold) || 0;
+  const steps = Math.floor(unitsSold / DRUG_JAIL_ESCALATION_STEP_UNITS);
+  return Math.min(DRUG_JAIL_ESCALATION_MAX_MULT, 1 + steps * DRUG_JAIL_ESCALATION_PER_STEP);
+}
+
 // Looks is this game's "charisma" stat elsewhere (speeds up job skill training) -- here it's a
 // smooth-talking/street-cred revenue bonus on top of the flat per-unit price roll.
 const DRUG_SELL_LOOKS_BONUS_MAX = 0.25; // up to +25% revenue at 100 Looks
@@ -1688,7 +1719,7 @@ function doSellDrugs(character, drugId, qty) {
 
   const riskChance = drugSellRiskChance(character, drug, qty);
   if (Math.random() < riskChance) {
-    const years = Math.max(1, Math.round(drug.jailYearsPerUnit * qty));
+    const years = Math.max(1, Math.round(drug.jailYearsPerUnit * qty * drugJailEscalationMultiplier(character)));
     removeFromInventory(character, drugId, qty);
     character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
     character.jail.inJail = true;
@@ -2609,7 +2640,7 @@ function doCommunityService(character) {
   const remaining = getRemainingCooldown(character, 'communityService', COMMUNITY_SERVICE_COOLDOWN_MS);
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
   if (character.crimeRecord.streak <= 0) return { ok: false, reason: 'Your record is already clean.' };
-  const cost = COMMUNITY_SERVICE_BASE_COST * (1 + character.crimeRecord.streak);
+  const cost = communityServiceCost(character.crimeRecord.streak);
   if (character.cash < cost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash = round2(character.cash - cost);
   character.crimeRecord.streak = Math.max(0, character.crimeRecord.streak - COMMUNITY_SERVICE_STREAK_REDUCTION);
