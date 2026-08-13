@@ -12,6 +12,16 @@ const ALLIANCE_DEBUFF_MINOR = 3; // smaller nudge toward Dirty Bad for lower-sta
 const GUZMAN_MIN_ALLIANCE = 60; // Bad Hustles require Bad or worse; also the floor a bust snaps you to
 const CRIME_STREAK_MAX = 12; // cap on how much a record can escalate a sentence
 
+// ---------- Da Skreetz starter ladder ----------
+// Rebalanced so the three starter hustles form an actual ladder instead of Crime dwarfing
+// everything else on day one. Work used to pay $2-10 (unusably bad) and Crime $100-1,000 (better
+// than several mid-game systems, at a 30% bust rate, from minute one). Mirrored client-side --
+// nothing displays these ranges today, but they must stay in step if anything ever does.
+const WORK_PAY_MIN = 10;
+const WORK_PAY_MAX = 30;
+const SKREETZ_CRIME_PAY_MIN = 80;
+const SKREETZ_CRIME_PAY_MAX = 400;
+
 // Reward ranges are 20% below their original values (Drugs & Rugs balance pass -- crime pay down).
 const CRIME_TIERS_BY_ID = {
   shoplift: { id: 'shoplift', name: '🛍️ Shoplifting', minReward: 64, maxReward: 160, jailYears: 1, baseRisk: 0.35 },
@@ -97,8 +107,116 @@ function nmgBaseIdOf(stackId) {
 // js/core.js) -- this is how the Portfolio Showcase and Player Market (below) tell a graded slab
 // apart from any other opaque, client-trusted title id without needing a title catalog of their own.
 const NMG_GRADED_ID_RE = /^.+_nmg\d{1,2}$/;
+// Capturing variant -- Regrade (below) needs the pre-grade id back so it can re-mint the slab with
+// a fresh suffix. Deliberately NOT nmgBaseIdOf(): that one also strips a `_p2` prestige level, which
+// is right for the "which title is this, really" eligibility check but wrong here, where a regraded
+// `cfRuby_p2_nmg7` must come back as `cfRuby_p2_nmg4`, not `cfRuby_nmg4`.
+const NMG_GRADED_ID_CAPTURE_RE = /^(.+)_nmg(\d{1,2})$/;
 function isGradedTitleId(itemId) {
   return NMG_GRADED_ID_RE.test(String(itemId || ''));
+}
+
+// ---------- Foil Ascension ----------
+// Burn 3 copies of one plain title + $25,000 -> 1 Foil. A cosmetic sink whose real job is removing
+// duplicate supply from the economy.
+//
+// Id shape `${baseId}_foil`. Verified non-colliding with the two existing synthesized id shapes on
+// BOTH sides of the client/server mirror: NMG_PRESTIGE_ID_RE / the client's PRESTIGE_ID_RE both
+// require `_p` followed by at least one DIGIT, and NMG_GRADED_ID_RE / the client's NMG_ID_RE both
+// require `_nmg` followed by 1-2 digits. A literal `_foil` suffix satisfies neither. Foils are also
+// only ever minted from a plain, un-prestiged, ungraded stack (see doFoilAscension), so a foil id
+// never nests inside another synthesized shape either.
+//
+// isCosmeticInventoryId() is a DENY-list (not a gun/melee/ammo/armor/gear/drug id) so `_foil` ids
+// already pass the /character/sync cosmetic check with no change needed there.
+const FOIL_SUFFIX = '_foil';
+const FOIL_ID_RE = /^(.+)_foil$/;
+const FOIL_ASCENSION_COPIES = 3;
+const FOIL_ASCENSION_COST = 25000;
+
+function isFoilTitleId(itemId) {
+  return FOIL_ID_RE.test(String(itemId || ''));
+}
+
+function doFoilAscension(character, stackId) {
+  const id = String(stackId || '');
+  if (!id) return { ok: false, reason: 'Unknown title.' };
+  // Same permissive-by-default eligibility reasoning as /nmg/submit: the server has no title
+  // catalog, so "not a known non-cosmetic id" is the check available.
+  if (!isCosmeticInventoryId(id)) return { ok: false, reason: 'That is not a title.' };
+  if (isFoilTitleId(id)) return { ok: false, reason: 'That is already a Foil.' };
+  if (isGradedTitleId(id)) return { ok: false, reason: 'Graded slabs cannot be foiled -- crack it first.' };
+  if (NMG_PRESTIGE_ID_RE.test(id)) return { ok: false, reason: 'Prestiged titles cannot be foiled.' };
+  if (inventoryQty(character, id) < FOIL_ASCENSION_COPIES) {
+    return { ok: false, reason: `You need ${FOIL_ASCENSION_COPIES} copies of that title.` };
+  }
+  if (character.cash < FOIL_ASCENSION_COST) return { ok: false, reason: 'Not enough Floydbucks.' };
+
+  character.cash = round2(character.cash - FOIL_ASCENSION_COST);
+  removeFromInventory(character, id, FOIL_ASCENSION_COPIES);
+  const foilId = `${id}${FOIL_SUFFIX}`;
+  addToInventory(character, foilId, 1);
+  return {
+    ok: true,
+    message: `Foil Ascension complete -- ${FOIL_ASCENSION_COPIES} copies consumed, 1 Foil forged.`,
+    cls: 'gain',
+    character,
+    foilId,
+  };
+}
+
+// ---------- NMG Regrade ----------
+// Resubmit an already-graded slab for a fresh roll. Occupies a real grading slot for the same
+// turnaround as a normal submission of that tier; the new grade can be higher, lower, or identical.
+//
+// Owner's pricing constraint: a regrade must cost LESS than the existing workaround of cracking the
+// slab and resubmitting it at the same tier. Crack is a flat $50,000 (mfmmoalpha/js/nmg.js
+// NMG_CRACK_COST). Fee = 60% of (crack + tier cost), rounded to the nearest $1,000:
+//   3hr    0.60 x (50,000 +  5,000 = 55,000) = 33,000  ->  $33,000  <  $55,000  (60.0%)
+//   1hr    0.60 x (50,000 + 10,000 = 60,000) = 36,000  ->  $36,000  <  $60,000  (60.0%)
+//   10min  0.60 x (50,000 + 20,000 = 70,000) = 42,000  ->  $42,000  <  $70,000  (60.0%)
+// The inequality holds with a 40% margin at all three tiers, and it holds for the RIGHT reason:
+// crack+resubmit also hands you a spare equippable copy along the way, so regrade being cheaper is
+// paying purely for the reroll. NMG_REGRADE_FEES is asserted against NMG_TIERS at module load below
+// so the two can never silently drift apart.
+const NMG_REGRADE_CRACK_COST = 50000; // mirrors the client's NMG_CRACK_COST
+const NMG_REGRADE_DISCOUNT = 0.6;
+const NMG_REGRADE_FEES = { '3hr': 33000, '1hr': 36000, '10min': 42000 };
+
+Object.keys(NMG_TIERS).forEach((tier) => {
+  const fee = NMG_REGRADE_FEES[tier];
+  const ceiling = NMG_REGRADE_CRACK_COST + NMG_TIERS[tier].cost;
+  if (!(fee > 0 && fee < ceiling)) {
+    throw new Error(`NMG regrade fee for "${tier}" ($${fee}) must be below crack+tier ($${ceiling}).`);
+  }
+});
+
+function nmgRegradeFee(tier) {
+  return NMG_REGRADE_FEES[tier] ?? null;
+}
+
+// Splits `${preGradeId}_nmg${grade}` back into its two parts, or null if the id isn't a slab.
+function parseGradedId(itemId) {
+  const m = NMG_GRADED_ID_CAPTURE_RE.exec(String(itemId || ''));
+  if (!m) return null;
+  return { preGradeId: m[1], grade: Number(m[2]) };
+}
+
+// The old graded id ceases to exist the moment a regrade is submitted, so anything that pins a slab
+// BY ID has to be cleaned up -- exactly what the client's crackNmgTitle() already does for the
+// Portfolio Showcase. Player Market needs no handling for the same reason it doesn't there: a
+// listed slab is already out of character.inventory (doCreateListing), so it fails the ownership
+// check above and can never reach this point.
+function detachGradedIdFromShowcases(character, gradedId) {
+  if (character.profile && Array.isArray(character.profile.slabShowcaseIds)) {
+    character.profile.slabShowcaseIds = character.profile.slabShowcaseIds.filter((id) => id !== gradedId);
+  }
+  if (character.profile && Array.isArray(character.profile.showcaseTitleIds)) {
+    character.profile.showcaseTitleIds = character.profile.showcaseTitleIds.filter((id) => id !== gradedId);
+  }
+  if (character.profile && character.profile.bannerTitleId === gradedId) {
+    character.profile.bannerTitleId = null;
+  }
 }
 
 // 10 stays genuinely rare; "Worn" (7-4) is the bulk of outcomes; "Sub" (3-1) is a real but small
@@ -825,44 +943,110 @@ function pickFlavorLine(pool, amount, playerName) {
   return line.replace('${amount}', `$${amount}`).replace('{player}', playerName || '');
 }
 
+// ---------- Arrest asset seizure ----------
+// Every path that sets jail.inJail = true also runs this: the NMPD confiscates a flat percentage
+// of CASH ON HAND. Banked money is deliberately untouched -- this is the whole point of the change,
+// it gives the Bank a real job (a safe) instead of being a pure flavor sink. Centralized here
+// rather than inlined at each of the ~8 jail-entry sites so the rate can never drift between them.
+// Returns the amount seized so each bust message can append arrestSeizureNote().
+const ARREST_SEIZURE_PCT = 0.15;
+
+function applyArrestSeizure(character) {
+  const cash = Math.max(0, character.cash || 0);
+  const seized = round2(cash * ARREST_SEIZURE_PCT);
+  if (seized <= 0) return 0;
+  character.cash = round2(character.cash - seized);
+  return seized;
+}
+
+function arrestSeizureNote(seized) {
+  if (!seized || seized <= 0) return '';
+  return ` NMPD seized $${seized.toFixed(2)} in asset forfeiture.`;
+}
+
 // Mirrors the client's doHustle('work') branch exactly, but takes character as a parameter
 // (no shared global) and enforces the cooldown server-side instead of trusting the caller.
-function doWork(character) {
+// ---------- Batch actions ----------
+// "xN" batch variants for the click-heaviest earners. The rule for every one of them: N INDEPENDENT
+// rolls (never one roll times N), N applications of whatever per-click side effects the single
+// version has, and a cooldown of N x the single cooldown. That keeps $/hr byte-for-byte identical
+// to spamming the single button -- this is purely click reduction, never a rate change.
+//
+// The cooldown is stamped into the FUTURE (now + (N-1)*duration) rather than adding a separate
+// "multiplier" field, because getRemainingCooldown() -- and its hand-mirrored client twin -- is
+// `duration - (now - last)`. A last-used stamp N-1 durations ahead therefore reads back as exactly
+// N x duration remaining, with zero changes needed on either side of the mirror.
+const BATCH_HUSTLE_MAX = 5; // Da Skreetz Work / Slut / Crime
+const BATCH_JOB_MAX = 10; // Good/Bad job skill shifts
+
+function clampBatchCount(count, max) {
+  const n = Math.floor(Number(count));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(max, n);
+}
+
+function stampBatchCooldown(character, key, count, durationMs) {
+  character.cooldowns[key] = Date.now() + (count - 1) * durationMs;
+}
+
+// Mirrors the client's doHustle('work') branch exactly, but takes character as a parameter
+// (no shared global) and enforces the cooldown server-side instead of trusting the caller.
+function doWork(character, count) {
   if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'work', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
   }
 
-  const gain = round2(randInt(2, 10) * varietyPayMultiplier(character));
-  character.cash += gain;
-  character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
-  character.cooldowns.work = Date.now();
+  const n = clampBatchCount(count, BATCH_HUSTLE_MAX);
+  let total = 0;
+  for (let i = 0; i < n; i += 1) {
+    total = round2(total + round2(randInt(WORK_PAY_MIN, WORK_PAY_MAX) * varietyPayMultiplier(character)));
+    character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
+  }
+  character.cash = round2(character.cash + total);
+  stampBatchCooldown(character, 'work', n, COOLDOWN_MS);
 
-  return { ok: true, message: pickFlavorLine(WORK_FLAVOR_LINES, gain), cls: 'gain', character };
+  const message = n > 1
+    ? `Worked ${n} shifts back to back: +$${total.toFixed(2)}.`
+    : pickFlavorLine(WORK_FLAVOR_LINES, total);
+  return { ok: true, message, cls: 'gain', character };
 }
 
 // Mirrors the client's doHustle('slut') branch exactly. `otherPlayerName` is looked up by the
 // route (getRandomOtherUserCharacterName in db.js) since gameLogic.js has no DB access of its own.
-function doSlut(character, otherPlayerName) {
+function doSlut(character, otherPlayerName, count) {
   if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'slut', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
   }
 
+  const n = clampBatchCount(count, BATCH_HUSTLE_MAX);
   const messages = [];
-  const gain = randInt(5, 60);
-  character.cash += gain;
-  character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF_MINOR);
-  messages.push({ message: pickFlavorLine(SLUT_FLAVOR_LINES, gain, otherPlayerName), cls: 'gain' });
-  if (Math.random() < 0.3) {
-    character.cash = Math.max(0, character.cash - gain);
-    messages.push({ message: `You got robbed! -${gain} Floydbucks.`, cls: 'loss' });
+  let net = 0;
+  let robbedCount = 0;
+  for (let i = 0; i < n; i += 1) {
+    const gain = randInt(5, 60);
+    character.cash += gain;
+    net += gain;
+    character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF_MINOR);
+    if (n === 1) messages.push({ message: pickFlavorLine(SLUT_FLAVOR_LINES, gain, otherPlayerName), cls: 'gain' });
+    // Independent robbery roll per trick, exactly as the single-click version does it.
+    if (Math.random() < 0.3) {
+      const lost = Math.min(gain, character.cash);
+      character.cash = Math.max(0, character.cash - gain);
+      net -= lost;
+      robbedCount += 1;
+      if (n === 1) messages.push({ message: `You got robbed! -${gain} Floydbucks.`, cls: 'loss' });
+    }
   }
-  character.cooldowns.slut = Date.now();
+  if (n > 1) {
+    messages.push({ message: `Turned ${n} tricks: net +$${round2(net).toFixed(2)}${robbedCount ? ` (robbed ${robbedCount}x along the way)` : ''}.`, cls: net >= 0 ? 'gain' : 'loss' });
+  }
+  stampBatchCooldown(character, 'slut', n, COOLDOWN_MS);
   const achievements = ensureAchievementsState(character);
-  achievements.slutCount += 1;
+  achievements.slutCount += n;
   const grantedTitle = maybeGrantAchievementTitle(character, 'looseTitle', achievements.slutCount >= LOOSE_TITLE_THRESHOLD);
   if (grantedTitle) messages.push(grantedTitle);
 
@@ -870,37 +1054,55 @@ function doSlut(character, otherPlayerName) {
 }
 
 // Mirrors the client's doHustle('crime') branch exactly, including the jail-bust path.
-function doCrime(character) {
+function doCrime(character, count) {
   if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   const remaining = getRemainingCooldown(character, 'crime', COOLDOWN_MS);
   if (remaining > 0) {
     return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
   }
 
-  character.cooldowns.crime = Date.now();
+  const n = clampBatchCount(count, BATCH_HUSTLE_MAX);
+  const messages = [];
+  let total = 0;
+  let done = 0;
 
-  if (Math.random() < 0.3) {
-    const years = 1 + character.crimeRecord.streak;
-    character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
-    character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
-    character.jail.inJail = true;
-    character.jail.crime = 'Crime';
-    character.jail.yearsRemaining = years;
-    character.jail.serving = false;
-    const streakNote = years > 1 ? ` Repeat offender: +${years - 1} year(s) added to your usual sentence.` : '';
-    return {
-      ok: true,
-      messages: [{ message: `Busted committing a crime! Sentenced to ${years} year(s).${streakNote}`, cls: 'loss' }],
-      jailed: true,
-      character,
-    };
+  for (let i = 0; i < n; i += 1) {
+    if (Math.random() < 0.3) {
+      // Bust ends the batch here. The successful portion is still paid out (already added to
+      // total below), and the cooldown is stamped for the attempts actually made, not the full N --
+      // being jailed is punishment enough without also eating the unused cooldown.
+      done = i + 1;
+      if (total > 0) character.cash = round2(character.cash + total);
+      const years = 1 + character.crimeRecord.streak;
+      character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
+      character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+      character.jail.inJail = true;
+      character.jail.crime = 'Crime';
+      character.jail.yearsRemaining = years;
+      character.jail.serving = false;
+      const seized = applyArrestSeizure(character);
+      stampBatchCooldown(character, 'crime', done, COOLDOWN_MS);
+      const streakNote = years > 1 ? ` Repeat offender: +${years - 1} year(s) added to your usual sentence.` : '';
+      const batchNote = n > 1 && i > 0 ? ` (${i} of ${n} jobs landed first, +$${total.toFixed(2)}.)` : '';
+      return {
+        ok: true,
+        messages: [{ message: `Busted committing a crime! Sentenced to ${years} year(s).${streakNote}${batchNote}${arrestSeizureNote(seized)}`, cls: 'loss' }],
+        jailed: true,
+        character,
+      };
+    }
+    total = round2(total + round2(randInt(SKREETZ_CRIME_PAY_MIN, SKREETZ_CRIME_PAY_MAX) * varietyPayMultiplier(character)));
+    character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
+    done = i + 1;
   }
 
-  const gain = round2(randInt(100, 1000) * varietyPayMultiplier(character));
-  character.cash += gain;
-  character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
+  character.cash = round2(character.cash + total);
+  stampBatchCooldown(character, 'crime', done, COOLDOWN_MS);
+  messages.push(n > 1
+    ? { message: `Pulled ${n} jobs clean: +$${total.toFixed(2)}.`, cls: 'gain' }
+    : { message: pickFlavorLine(CRIME_FLAVOR_LINES, total), cls: 'gain' });
 
-  return { ok: true, messages: [{ message: pickFlavorLine(CRIME_FLAVOR_LINES, gain), cls: 'gain' }], jailed: false, character };
+  return { ok: true, messages, jailed: false, character };
 }
 
 // Mirrors the client's doWorkout() exactly. No cooldown -- gated by fuel (fatGained) and cash
@@ -1535,7 +1737,7 @@ function doResignGoodJob(character) {
 // Mirrors the client's doGoodJobWork() exactly, but derives the cooldown key from the skill key
 // server-side (jobSkill1..4) instead of trusting a client-supplied cooldown key, and enforces the
 // cooldown itself -- the client only disabled the button, it never validated this internally.
-function doGoodJobWork(character, skillKey) {
+function doGoodJobWork(character, skillKey, count) {
   if (isVarietyAutoFired(character)) return { ok: false, reason: 'Your Variety is too high -- you were fired. Renounce Variety at the Morals Center to work again.' };
   const job = GOOD_JOBS_BY_ID[character.jobs.currentJob];
   if (!job) return { ok: false, reason: 'You are not employed.' };
@@ -1547,20 +1749,29 @@ function doGoodJobWork(character, skillKey) {
   const remaining = getRemainingCooldown(character, cooldownKey, rank.cooldownMs);
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
+  const n = clampBatchCount(count, BATCH_JOB_MAX);
+  // ceoActive/maxxActive are evaluated once for the whole shift rather than re-checked per payout:
+  // both depend on the skill average, which the batch itself raises, and re-checking mid-batch would
+  // let a x10 shift cross the CEO threshold partway and pay MORE per click than 10 single clicks
+  // would have. Locking them at the pre-batch value keeps $/hr exactly identical.
   const ceoActive = goodJobSkillAvg(character) >= GOOD_CEO_MIN_AVG && character.alliance <= COMBAT_GOOD_MAX_ALLIANCE;
   const maxxActive = isMaxxComplete(character);
-  const gain = round2(randFloat(rank.payMin, rank.payMax)
-    * (ceoActive ? GOOD_CEO_MULTIPLIER : 1)
-    * (maxxActive ? MAXX_COMPLETE_MULTIPLIER : 1)
-    * varietyPayMultiplier(character));
+  let gain = 0;
+  for (let i = 0; i < n; i += 1) {
+    gain = round2(gain + round2(randFloat(rank.payMin, rank.payMax)
+      * (ceoActive ? GOOD_CEO_MULTIPLIER : 1)
+      * (maxxActive ? MAXX_COMPLETE_MULTIPLIER : 1)
+      * varietyPayMultiplier(character)));
+    const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * goodJobSkillTrainMult(character);
+    character.jobs.skills[skillKey] = clampStat(character.jobs.skills[skillKey] + skillGain);
+    character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
+  }
   character.cash = round2(character.cash + gain);
-  const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * goodJobSkillTrainMult(character);
-  character.jobs.skills[skillKey] = clampStat(character.jobs.skills[skillKey] + skillGain);
-  character.cooldowns[cooldownKey] = Date.now();
-  character.alliance = clampStat(character.alliance - ALLIANCE_BUFF);
+  stampBatchCooldown(character, cooldownKey, n, rank.cooldownMs);
 
   const bonusNote = `${ceoActive ? ' (👔 CEO Bonus)' : ''}${maxxActive ? ' (💈 Maxxed Bonus)' : ''}`;
-  const messages = [{ message: `${job.name}: +$${gain.toFixed(2)}${bonusNote}.`, cls: 'gain' }];
+  const shiftNote = n > 1 ? ` x${n} shift` : '';
+  const messages = [{ message: `${job.name}${shiftNote}: +$${gain.toFixed(2)}${bonusNote}.`, cls: 'gain' }];
   if (job.id === 'pizza' && !character.jobs.pizzaPerkGranted && goodJobPerkActive(character, 'pizza')) {
     character.stats.speed = clampStat(character.stats.speed + 2);
     character.jobs.pizzaPerkGranted = true;
@@ -1589,7 +1800,7 @@ function doResignBadJob(character) {
 
 // Mirrors the client's doBadJobWork() exactly, including the jail-bust path. Same cooldown-key
 // derivation and internal cooldown enforcement as doGoodJobWork().
-function doBadJobWork(character, skillKey) {
+function doBadJobWork(character, skillKey, count) {
   if (isVarietyAutoFired(character)) return { ok: false, reason: 'Your Variety is too high -- you were fired. Renounce Variety at the Morals Center to work again.' };
   const job = BAD_JOBS_BY_ID[character.badJobs.currentJob];
   if (!job) return { ok: false, reason: 'You are not employed.' };
@@ -1601,31 +1812,46 @@ function doBadJobWork(character, skillKey) {
   const remaining = getRemainingCooldown(character, cooldownKey, rank.cooldownMs);
   if (remaining > 0) return { ok: false, reason: `Still on cooldown for ${Math.ceil(remaining / 1000)}s.` };
 
-  character.cooldowns[cooldownKey] = Date.now();
-  if (Math.random() < badJobBustChance(character)) {
-    const years = BAD_JOB_JAIL_YEARS + character.crimeRecord.streak;
-    character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
-    character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
-    character.jail.inJail = true;
-    character.jail.crime = job.name;
-    character.jail.yearsRemaining = years;
-    character.jail.serving = false;
-    const streakNote = years > BAD_JOB_JAIL_YEARS ? ` (${BAD_JOB_JAIL_YEARS} base + ${years - BAD_JOB_JAIL_YEARS} repeat-offender)` : '';
-    return {
-      ok: true,
-      jailed: true,
-      message: `Busted working for ${job.name}! Sentenced to ${years} year(s)${streakNote}.`,
-      cls: 'loss',
-      character,
-    };
+  const n = clampBatchCount(count, BATCH_JOB_MAX);
+  // Bust chance is snapshotted for the same reason the CEO/Maxx bonuses are in doGoodJobWork: it
+  // derives from the skill average this batch is actively raising, so re-rolling it against a
+  // mid-batch average would make a x10 shift statistically safer than 10 single clicks.
+  const bustChance = badJobBustChance(character);
+  let gain = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (Math.random() < bustChance) {
+      // Stop at the first bust: pay out what was already earned, jail as usual, and only charge
+      // cooldown for the shifts actually attempted.
+      if (gain > 0) character.cash = round2(character.cash + gain);
+      stampBatchCooldown(character, cooldownKey, i + 1, rank.cooldownMs);
+      const years = BAD_JOB_JAIL_YEARS + character.crimeRecord.streak;
+      character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
+      character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+      character.jail.inJail = true;
+      character.jail.crime = job.name;
+      character.jail.yearsRemaining = years;
+      character.jail.serving = false;
+      const seized = applyArrestSeizure(character);
+      const streakNote = years > BAD_JOB_JAIL_YEARS ? ` (${BAD_JOB_JAIL_YEARS} base + ${years - BAD_JOB_JAIL_YEARS} repeat-offender)` : '';
+      const batchNote = n > 1 && i > 0 ? ` (${i} of ${n} shifts paid out first, +$${gain.toFixed(2)}.)` : '';
+      return {
+        ok: true,
+        jailed: true,
+        message: `Busted working for ${job.name}! Sentenced to ${years} year(s)${streakNote}.${batchNote}${arrestSeizureNote(seized)}`,
+        cls: 'loss',
+        character,
+      };
+    }
+    gain = round2(gain + round2(randFloat(rank.payMin, rank.payMax) * varietyPayMultiplier(character)));
+    const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * badJobSkillTrainMult(character);
+    character.badJobs.skills[skillKey] = clampStat(character.badJobs.skills[skillKey] + skillGain);
+    character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
   }
 
-  const gain = round2(randFloat(rank.payMin, rank.payMax) * varietyPayMultiplier(character));
   character.cash = round2(character.cash + gain);
-  const skillGain = randFloat(JOB_SKILL_TRAIN_MIN, JOB_SKILL_TRAIN_MAX) * badJobSkillTrainMult(character);
-  character.badJobs.skills[skillKey] = clampStat(character.badJobs.skills[skillKey] + skillGain);
-  character.alliance = clampStat(character.alliance + ALLIANCE_DEBUFF);
-  return { ok: true, jailed: false, message: `${job.name}: +$${gain.toFixed(2)}.`, cls: 'gain', character };
+  stampBatchCooldown(character, cooldownKey, n, rank.cooldownMs);
+  const shiftNote = n > 1 ? ` x${n} shift` : '';
+  return { ok: true, jailed: false, message: `${job.name}${shiftNote}: +$${gain.toFixed(2)}.`, cls: 'gain', character };
 }
 
 // Mirrors the client's doBuyGear() exactly -- Wrestling Gear Store, unlocked by the wrestler perk.
@@ -1726,7 +1952,8 @@ function doSellDrugs(character, drugId, qty) {
     character.jail.crime = `Selling ${drug.name}`;
     character.jail.yearsRemaining = years;
     character.jail.serving = false;
-    return { ok: true, jailed: true, message: `Busted selling ${qty}x ${drug.name}! Sentenced to ${years} year(s).`, cls: 'loss', character };
+    const seized = applyArrestSeizure(character);
+    return { ok: true, jailed: true, message: `Busted selling ${qty}x ${drug.name}! Sentenced to ${years} year(s).${arrestSeizureNote(seized)}`, cls: 'loss', character };
   }
 
   const unitPrice = randFloat(drug.sellMin, drug.sellMax) * drugSellRevenueMultiplier(character);
@@ -1775,7 +2002,8 @@ function doRobbery(character, activeModifier) {
   character.jail.crime = 'Attempted Robbery';
   character.jail.yearsRemaining = ROBBERY_JAIL_YEARS;
   character.jail.serving = false;
-  return { ok: true, jailed: true, message: `They noticed, fought back, and beat you! Sentenced to ${ROBBERY_JAIL_YEARS} year.`, cls: 'loss', character };
+  const seized = applyArrestSeizure(character);
+  return { ok: true, jailed: true, message: `They noticed, fought back, and beat you! Sentenced to ${ROBBERY_JAIL_YEARS} year.${arrestSeizureNote(seized)}`, cls: 'loss', character };
 }
 
 // PvP robbery of a specific real target (as opposed to doRobbery's flavor-text "stranger"). Same
@@ -1849,11 +2077,12 @@ function doRobPlayer(attacker, target, targetUserId, activeModifier) {
   attacker.jail.crime = 'Attempted Robbery';
   attacker.jail.yearsRemaining = years;
   attacker.jail.serving = false;
+  const seized = applyArrestSeizure(attacker);
   const streakNote = years > ROBBERY_JAIL_YEARS ? ` (${ROBBERY_JAIL_YEARS} base + ${years - ROBBERY_JAIL_YEARS} repeat-offender)` : '';
   return {
     ok: true,
     jailed: true,
-    message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${years} year(s)${streakNote}.`,
+    message: `${target.firstName} noticed, fought back, and beat you! Sentenced to ${years} year(s)${streakNote}.${arrestSeizureNote(seized)}`,
     cls: 'loss',
     attacker,
     target,
@@ -1916,9 +2145,12 @@ function isGunSlotIllegal(character, slot) {
 // Busts `character` for the gun in `slot` if it's illegally carried and the roll catches them --
 // forfeits that gun and jails them. Returns whether it happened so the caller can react (e.g. an
 // armed defender whose gun gets confiscated mid-shootout never gets to use it).
+// Returns { busted, seized } rather than a plain boolean now that every jail entry also triggers
+// asset forfeiture -- the caller needs the seized amount to append to its own message, and a bare
+// number can't be used as the busted flag (a broke player is legitimately busted for $0).
 function checkIllegalGunBust(character, slot) {
-  if (!isGunSlotIllegal(character, slot)) return false;
-  if (Math.random() >= ILLEGAL_GUN_BUST_CHANCE) return false;
+  if (!isGunSlotIllegal(character, slot)) return { busted: false, seized: 0 };
+  if (Math.random() >= ILLEGAL_GUN_BUST_CHANCE) return { busted: false, seized: 0 };
   const gunId = character.equipment[slot];
   character.equipment[slot] = null;
   removeFromInventory(character, gunId, 1);
@@ -1927,7 +2159,7 @@ function checkIllegalGunBust(character, slot) {
   character.jail.crime = 'Illegal Firearm Possession';
   character.jail.yearsRemaining = JAIL_YEARS_ILLEGAL_GUN;
   character.jail.serving = false;
-  return true;
+  return { busted: true, seized: applyArrestSeizure(character) };
 }
 
 function slimeShootingHitChance(character) {
@@ -1945,7 +2177,7 @@ function jailForFailedSlime(character) {
   character.jail.crime = 'Attempted Sliming';
   character.jail.yearsRemaining = years;
   character.jail.serving = false;
-  return years;
+  return { years, seized: applyArrestSeizure(character) };
 }
 
 function slimeCharacter(character, byName) {
@@ -1992,12 +2224,13 @@ function doSlimePlayer(shooter, target, targetUserId) {
   }
 
   // Caught before you even get a shot off -- gun confiscated, attempt never happens.
-  if (checkIllegalGunBust(shooter, shooterSlot)) {
+  const shooterGunBust = checkIllegalGunBust(shooter, shooterSlot);
+  if (shooterGunBust.busted) {
     return {
       ok: true,
       jailed: true,
       illegalGunBust: true,
-      message: `A cop spotted your illegally carried gun before you could even fire! Confiscated, and you're sentenced to ${JAIL_YEARS_ILLEGAL_GUN} years.`,
+      message: `A cop spotted your illegally carried gun before you could even fire! Confiscated, and you're sentenced to ${JAIL_YEARS_ILLEGAL_GUN} years.${arrestSeizureNote(shooterGunBust.seized)}`,
       cls: 'loss',
       shooter,
       target,
@@ -2010,7 +2243,7 @@ function doSlimePlayer(shooter, target, targetUserId) {
   let targetArmed = !!targetSlot;
   let targetGunConfiscated = false;
   if (targetArmed) {
-    targetGunConfiscated = checkIllegalGunBust(target, targetSlot);
+    targetGunConfiscated = checkIllegalGunBust(target, targetSlot).busted;
     if (targetGunConfiscated) {
       targetArmed = false; // confiscated mid-fight -- never gets to use it in self-defense
     } else {
@@ -2054,12 +2287,13 @@ function doSlimePlayer(shooter, target, targetUserId) {
   if (loser.equipment.armor) {
     removeFromInventory(loser, loser.equipment.armor, 1);
     loser.equipment.armor = null;
-    const years = jailForFailedSlime(winner);
+    const { years, seized } = jailForFailedSlime(winner);
     // Message is always written from the shooter's (the API caller's) point of view -- in a duel
     // the shooter can end up on either side of "who got jailed", so this can't just assume "you"
-    // means the winner.
+    // means the winner. The forfeiture note only shows on the branch where the caller is the one
+    // who lost the cash; the other side learns about their own seizure from their own client.
     const message = winnerSide === 'shooter'
-      ? `${duel ? `You won the shootout (${duel.shooterRoll} vs ${duel.targetRoll}), but` : `You shot at ${loserName}, but`} their body armor absorbed the shot! You're sentenced to ${years} year(s) for the attempt.${confiscatedNote}`
+      ? `${duel ? `You won the shootout (${duel.shooterRoll} vs ${duel.targetRoll}), but` : `You shot at ${loserName}, but`} their body armor absorbed the shot! You're sentenced to ${years} year(s) for the attempt.${arrestSeizureNote(seized)}${confiscatedNote}`
       : `${loserName} shot back at you. They won the shootout (${duel.targetRoll} vs ${duel.shooterRoll}), but your body armor absorbed it! They're sentenced to ${years} year(s) for the attempt.`;
     return {
       ok: true,
@@ -2625,8 +2859,9 @@ function doAttemptCrime(character, tierId) {
     character.jail.crime = tier.name;
     character.jail.yearsRemaining = years;
     character.jail.serving = false;
+    const seized = applyArrestSeizure(character);
     const streakNote = years > tier.jailYears ? ` (${tier.jailYears} base + ${years - tier.jailYears} repeat-offender)` : '';
-    return { ok: true, jailed: true, message: `Busted committing ${tier.name}! Sentenced to ${years} year(s)${streakNote}.`, cls: 'loss', character };
+    return { ok: true, jailed: true, message: `Busted committing ${tier.name}! Sentenced to ${years} year(s)${streakNote}.${arrestSeizureNote(seized)}`, cls: 'loss', character };
   }
 
   const gain = round2(randFloat(tier.minReward, tier.maxReward));
@@ -2849,6 +3084,26 @@ const FARM_SECURITY_TIER_COST = 10000; // flat per tier, scales with tier number
 // outpace the rest of the intentional economy slowdown. Flag before raising this.
 const FARM_MAX_PLOTS = 1;
 
+// A harvested "package" is a BRICK, not a single street unit. Before this, a harvest granted
+// plot.qty raw drug units, which made farming strictly worse than doing nothing: a max weed run
+// cost $1,800 (prep $1,200 + 4 seeds x $150) and yielded 4 units worth ~$144. Each package now
+// grants this many units.
+//
+// EV at max security (5% confiscation), using the midpoint street price and no Looks bonus:
+//   Weed  4 packages x 20 units x $36 avg = $2,880 gross; 0.95 x 2,880 - $1,800 = ~+$936
+//   Coke  4 packages x 12 units x $243 avg = $11,664 gross; 0.95 x 11,664 - $6,000 = ~+$5,080
+// At the unimproved 30% confiscation rate coke still nets ~+$2,165, so security upgrades are worth
+// buying without being mandatory. Coke was raised from the originally specced 8 units because 8
+// landed the max run at only ~+$1,400 EV, below the $3-6k target for an endgame system whose plot
+// alone costs $50,000. Note these are GROSS street values -- doSellDrugs' own per-quantity bust
+// risk still applies when the player actually offloads the bricks.
+const FARM_PACKAGE_UNITS_BY_DRUG = { drugWeed: 20, drugCoke: 12 };
+const FARM_PACKAGE_UNITS_DEFAULT = 10;
+
+function farmPackageUnits(drugId) {
+  return FARM_PACKAGE_UNITS_BY_DRUG[drugId] || FARM_PACKAGE_UNITS_DEFAULT;
+}
+
 function ensureFarmsState(character) {
   if (!character.farms) character.farms = { plots: [], securityTier: 0 };
   if (character.farms.securityTier === undefined) character.farms.securityTier = 0;
@@ -2949,7 +3204,7 @@ function doPlantFarmSeed(character, plotId, drugId, qty) {
     : `Risk rolled and cleared (${Math.round(chance * 100)}% odds) -- this run is safe from confiscation.`;
   return {
     ok: true,
-    message: `Planted ${plantQty}x ${DRUG_ITEMS_BY_ID[drugId].name} seed${plantQty > 1 ? 's' : ''}. ${riskNote}`,
+    message: `Planted ${plantQty}x ${DRUG_ITEMS_BY_ID[drugId].name} seed${plantQty > 1 ? 's' : ''} (${plantQty * farmPackageUnits(drugId)} units at harvest). ${riskNote}`,
     cls: confiscated ? 'loss' : 'gain',
     character,
   };
@@ -2965,11 +3220,13 @@ function doCollectFarmHarvest(character, plotId) {
   let message;
   let cls;
   if (plot.confiscated) {
-    message = `Confiscated: your ${drugName} shipment was seized. No packages.`;
+    message = `Confiscated: your ${drugName} shipment was seized. No bricks.`;
     cls = 'loss';
   } else {
-    addToInventory(character, plot.drugType, plot.qty);
-    message = `Shipment landed! ${plot.qty}x ${drugName} package${plot.qty > 1 ? 's' : ''} added to your Inventory.`;
+    const perBrick = farmPackageUnits(plot.drugType);
+    const units = plot.qty * perBrick;
+    addToInventory(character, plot.drugType, units);
+    message = `Shipment landed! ${plot.qty} brick${plot.qty > 1 ? 's' : ''} = ${units} units of ${drugName} added to your Inventory.`;
     cls = 'gain';
   }
   plot.drugType = null;
@@ -3145,10 +3402,19 @@ function cryptoMachineScaling(machineTier) {
   return Math.pow(MACHINE_UPGRADE_SCALING, machineTier);
 }
 
+// De-compounded (rebalance): the machine-tier scaling multiplier used to be applied to the RATE as
+// well as the cost, so each of the 10 machines multiplied BOTH its own tabled baseRate and every
+// upgrade's tabled addRate by 1.5^tier -- on the last machine that's 1.5^9 = 38.4x on top of an
+// already-10x-higher base rate, and a maxed rig produced ~220 FC/day (~$2.2M/day). Rates are now
+// exactly what the tables say: machine = baseRate, upgrades = addRate. A maxed rig is 5.00 +
+// (0.17 ram + 0.42 cpu + 0.85 gpu) = 6.44 FC/day (~$64k/day) before prestige.
+//
+// The scaling deliberately STAYS in cryptoNextTrackCost() -- upgrades still get 1.5x more expensive
+// per machine tier, so advancing the rig is still a real investment, it just no longer compounds
+// into a runaway rate curve. Prestige multipliers are untouched.
 function cryptoTrackAddRate(crypto, track) {
   const tier = crypto[`${track}Tier`];
-  const scale = cryptoMachineScaling(crypto.machineTier);
-  return CRYPTO_UPGRADE_TIERS[track].slice(0, tier).reduce((sum, t) => sum + t.addRate * scale, 0);
+  return CRYPTO_UPGRADE_TIERS[track].slice(0, tier).reduce((sum, t) => sum + t.addRate, 0);
 }
 
 function cryptoNextTrackCost(crypto, track) {
@@ -3165,7 +3431,8 @@ function cryptoTracksMaxed(crypto) {
 
 function cryptoDailyRate(crypto) {
   const machine = CRYPTO_MACHINES[crypto.machineTier];
-  const machineRate = machine.baseRate * cryptoMachineScaling(crypto.machineTier);
+  // No cryptoMachineScaling() here -- see the comment on cryptoTrackAddRate above.
+  const machineRate = machine.baseRate;
   const upgradeRate = cryptoTrackAddRate(crypto, 'ram') + cryptoTrackAddRate(crypto, 'cpu') + cryptoTrackAddRate(crypto, 'gpu');
   return (machineRate + upgradeRate) * cryptoPrestigeRateMultiplier(crypto.prestigeLevel);
 }
@@ -3993,6 +4260,14 @@ module.exports = {
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
+  isFoilTitleId,
+  doFoilAscension,
+  FOIL_ASCENSION_COST,
+  FOIL_ASCENSION_COPIES,
+  NMG_REGRADE_FEES,
+  nmgRegradeFee,
+  parseGradedId,
+  detachGradedIdFromShowcases,
   COSMETIXX_MARKET_SLOT_COUNT,
   COSMETIXX_MARKET_ROTATION_MS,
   generateCosmetixxMarketSlots,

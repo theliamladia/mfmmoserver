@@ -219,6 +219,11 @@ const {
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
+  isFoilTitleId,
+  doFoilAscension,
+  nmgRegradeFee,
+  parseGradedId,
+  detachGradedIdFromShowcases,
   COSMETIXX_MARKET_ROTATION_MS,
   generateCosmetixxMarketSlots,
   LEADERBOARD_TITLES,
@@ -1398,6 +1403,10 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   // already missed two real crates -- Milos Legends and Leems Larudo x GOOD -- by the time this was
   // caught).
   if (!isCosmeticInventoryId(baseId)) return res.status(400).json({ ok: false, reason: 'This title cannot be graded.' });
+  // Foils are deliberately out of the grading system entirely (kept simple -- a `_foil_nmg7` id
+  // would need its own art-compositing path on every slab surface). Mirrored client-side in
+  // nmgSubmitCandidates().
+  if (isFoilTitleId(stackId)) return res.status(400).json({ ok: false, reason: 'Foil titles cannot be graded.' });
   if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that title." });
   if (character.cash < tierDef.cost) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
 
@@ -1420,6 +1429,66 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgSubmit', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
   res.json({ ok: true, character, slot: { id: rowId, slotIndex, titleId: stackId, tier, submittedAt: now, readyAt } });
+});
+
+// Regrade: resubmit an owned slab for a fresh roll. Structurally the same as /nmg/submit -- it
+// consumes a slot, charges up front, and the actual roll happens later at /nmg/reveal -- with two
+// differences: it burns the GRADED id instead of a plain title, and it stores the slab's pre-grade
+// id as the slot's title_id, so /nmg/reveal's existing `${row.title_id}_nmg${grade}` mint produces
+// the re-suffixed slab with no changes needed there at all.
+app.post('/nmg/regrade', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { stackId, tier } = req.body || {};
+  const tierDef = NMG_TIERS[tier];
+  if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
+  const fee = nmgRegradeFee(tier);
+  if (fee === null) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
+
+  const parsed = parseGradedId(stackId);
+  if (!parsed) return res.status(400).json({ ok: false, reason: 'That is not a graded slab.' });
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  const active = getActiveNmgSlots(user.id);
+  if (active.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: 'All 4 grading slots are full.' });
+
+  if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that slab." });
+  if (character.cash < fee) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
+
+  const cashBefore = character.cash;
+  character.cash = round2(character.cash - fee);
+  removeFromInventory(character, stackId, 1);
+  // The old graded id is gone from here on -- unpin it anywhere it was displayed by id.
+  detachGradedIdFromShowcases(character, stackId);
+
+  const usedIndexes = new Set(active.map((s) => s.slot_index));
+  const slotIndex = [0, 1, 2, 3].find((i) => !usedIndexes.has(i));
+  const now = Date.now();
+  const isAdminTester = (req.user?.username || '').toLowerCase() === ADMIN_USERNAME;
+  const durationMs = isAdminTester ? 5000 : tierDef.ms;
+  const readyAt = now + durationMs;
+  const rowId = createNmgSlot(user.id, slotIndex, parsed.preGradeId, tier, fee, now, readyAt);
+
+  logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgRegrade', round2(character.cash - cashBefore), character.cash);
+  saveCharacter(user.id, character);
+  res.json({
+    ok: true,
+    character,
+    slot: { id: rowId, slotIndex, titleId: parsed.preGradeId, tier, submittedAt: now, readyAt },
+    previousGrade: parsed.grade,
+  });
+});
+
+// Foil Ascension (Cosmetixxx): 3 copies of one plain title + $25,000 -> 1 `${baseId}_foil`.
+// Plain runAction() -- no shared/DB-table state involved, unlike the NMG routes above.
+app.post('/cosmetics/foil-ascension', requireAuth, (req, res) => {
+  const { stackId } = req.body || {};
+  runAction(req, res, doFoilAscension, stackId);
 });
 
 app.post('/nmg/reveal', requireAuth, (req, res) => {
@@ -1498,9 +1567,10 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
   res.json({ ok: true, character, result: { gradedId, price: row.price } });
 });
 
-app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork));
-app.post('/hustle/slut', requireAuth, (req, res) => runAction(req, res, doSlut, getRandomOtherUserCharacterName(req.user.sub)));
-app.post('/hustle/crime', requireAuth, (req, res) => runAction(req, res, doCrime));
+// `count` is the x5 batch size (clamped server-side in each doX -- see clampBatchCount).
+app.post('/hustle/work', requireAuth, (req, res) => runAction(req, res, doWork, (req.body || {}).count));
+app.post('/hustle/slut', requireAuth, (req, res) => runAction(req, res, doSlut, getRandomOtherUserCharacterName(req.user.sub), (req.body || {}).count));
+app.post('/hustle/crime', requireAuth, (req, res) => runAction(req, res, doCrime, (req.body || {}).count));
 
 app.post('/gym/workout', requireAuth, (req, res) => runAction(req, res, doWorkout));
 app.post('/gym/steroid-tier', requireAuth, (req, res) => {
@@ -1636,9 +1706,11 @@ app.post('/jobs/good/apply', requireAuth, (req, res) => {
   runAction(req, res, doApplyGoodJob, jobId);
 });
 app.post('/jobs/good/resign', requireAuth, (req, res) => runAction(req, res, doResignGoodJob));
+// `count` is the x10 batch size. Clamped inside doGoodJobWork/doBadJobWork (clampBatchCount) rather
+// than here, so a direct API call can't request 1,000 shifts on one cooldown.
 app.post('/jobs/good/work', requireAuth, (req, res) => {
-  const { skillKey } = req.body || {};
-  runAction(req, res, doGoodJobWork, skillKey);
+  const { skillKey, count } = req.body || {};
+  runAction(req, res, doGoodJobWork, skillKey, count);
 });
 
 app.post('/jobs/bad/apply', requireAuth, (req, res) => {
@@ -1647,8 +1719,8 @@ app.post('/jobs/bad/apply', requireAuth, (req, res) => {
 });
 app.post('/jobs/bad/resign', requireAuth, (req, res) => runAction(req, res, doResignBadJob));
 app.post('/jobs/bad/work', requireAuth, (req, res) => {
-  const { skillKey } = req.body || {};
-  runAction(req, res, doBadJobWork, skillKey);
+  const { skillKey, count } = req.body || {};
+  runAction(req, res, doBadJobWork, skillKey, count);
 });
 
 app.post('/jobs/gear', requireAuth, (req, res) => {
