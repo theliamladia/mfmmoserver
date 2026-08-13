@@ -219,7 +219,6 @@ const {
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
-  isFoilTitleId,
   doFoilAscension,
   nmgRegradeFee,
   parseGradedId,
@@ -1403,10 +1402,11 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   // already missed two real crates -- Milos Legends and Leems Larudo x GOOD -- by the time this was
   // caught).
   if (!isCosmeticInventoryId(baseId)) return res.status(400).json({ ok: false, reason: 'This title cannot be graded.' });
-  // Foils are deliberately out of the grading system entirely (kept simple -- a `_foil_nmg7` id
-  // would need its own art-compositing path on every slab surface). Mirrored client-side in
-  // nmgSubmitCandidates().
-  if (isFoilTitleId(stackId)) return res.status(400).json({ ok: false, reason: 'Foil titles cannot be graded.' });
+  // Foils ARE gradeable (the earlier blanket exclusion has been reversed). `${base}_foil_nmg${N}`
+  // needs no special handling anywhere: nmgBaseIdOf() only strips a `_p\d+` prestige level, so the
+  // eligibility check above sees `${base}_foil` and passes it through isCosmeticInventoryId's
+  // deny-list unchanged, and /nmg/reveal's `${row.title_id}_nmg${grade}` mint produces the graded
+  // foil id directly. Prestige remains the one thing a Foil can never do.
   if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that title." });
   if (character.cash < tierDef.cost) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
 
