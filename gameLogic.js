@@ -354,6 +354,57 @@ function cosmetixxSlabPrice(title, grade) {
   return Math.min(max, Math.max(COSMETIXX_MARKET_MIN_PRICE, rounded));
 }
 
+// ---------- KOLLECTOR leaderboard (Graded Collection value) ----------
+// Ranks players by the total CosmetixxMarket-equivalent value of every graded slab (`_nmgN`
+// inventory stack) they own. Reuses cosmetixxSlabPrice() -- the established pricing authority --
+// for plain slabs. Graded Foils get their own derivation below, since a foil isn't sold in
+// CosmetixxMarket at all: its real cost basis comes from the Foil Ascension recipe itself (burn 3
+// copies of the base title + $25,000 -> 1 Foil, see doFoilAscension/FOIL_ASCENSION_COST above), so
+// a foil slab is valued as "3 pre-grade base slabs + the ascension fee, at the grade's multiplier."
+//
+// Titles outside COSMETIXX_MARKET_TITLES (Open Beta, GOOD Season 1 -- excluded from that catalog by
+// design, see the comment above it) have no market price to draw on, so slabs of those titles value
+// at 0 here too, for the same reason the market itself excludes them. Unknown/garbage inventory ids
+// (never crash on a corrupt/foreign stack id) also value at 0.
+function foilSlabValue(titleEntry, grade) {
+  const rarityFactor = Math.sqrt(COSMETIXX_MARKET_BASELINE_WEIGHT / titleEntry.weight);
+  const archivedMult = titleEntry.archived ? COSMETIXX_MARKET_ARCHIVED_MULT : 1;
+  // Pre-grade value of one plain slab of this title -- same formula as cosmetixxSlabPrice() minus
+  // the grade multiplier, since a foil doesn't carry a grade of its own until it's separately NMG'd.
+  const basePreGrade = titleEntry.crateCost * rarityFactor * archivedMult;
+  const raw = (3 * basePreGrade + FOIL_ASCENSION_COST) * COSMETIXX_MARKET_GRADE_MULT[grade];
+  const rounded = Math.round(raw / 100) * 100;
+  // Clamp mirrors cosmetixxSlabPrice()'s own clamp, scaled for the recipe: 3x the applicable normal/
+  // archived slab cap (one per consumed copy) plus the flat ascension fee.
+  const baseMax = titleEntry.archived ? COSMETIXX_MARKET_ARCHIVED_MAX_PRICE : COSMETIXX_MARKET_MAX_PRICE;
+  const max = 3 * baseMax + 75000;
+  return Math.min(max, Math.max(COSMETIXX_MARKET_MIN_PRICE, rounded));
+}
+
+// Resolves a graded stack's pre-grade id (foil or plain, possibly prestiged) back to its
+// COSMETIXX_MARKET_TITLES catalog entry, or null if it's not a priced title (Open Beta / GOOD
+// Season 1 / garbage id).
+function findGradedCollectionEntry(preGradeId) {
+  const foilMatch = FOIL_ID_RE.exec(preGradeId);
+  const baseId = foilMatch ? nmgBaseIdOf(foilMatch[1]) : nmgBaseIdOf(preGradeId);
+  const titleEntry = COSMETIXX_MARKET_TITLES.find((t) => t.id === baseId);
+  return { titleEntry, isFoil: !!foilMatch };
+}
+
+function gradedCollectionValue(character) {
+  let total = 0;
+  (character.inventory || []).forEach((stack) => {
+    if (!(stack.qty > 0)) return;
+    const parsed = parseGradedId(stack.id);
+    if (!parsed) return; // not a graded slab at all
+    const { titleEntry, isFoil } = findGradedCollectionEntry(parsed.preGradeId);
+    if (!titleEntry) return; // Open Beta / GOOD Season 1 / unknown id -- no market price
+    const unitValue = isFoil ? foilSlabValue(titleEntry, parsed.grade) : cosmetixxSlabPrice(titleEntry, parsed.grade);
+    total += unitValue * stack.qty;
+  });
+  return round2(total);
+}
+
 // Sampling without replacement -- the pool (60+ titles) is large relative to 5 picks, so a simple
 // retry-on-duplicate loop converges immediately in practice rather than needing a real shuffle.
 function pickDistinctCosmetixxTitles(count) {
@@ -3783,9 +3834,12 @@ const LEADERBOARD_TITLES = {
   networth: { id: 'highestNetWorth', name: 'HIGHEST NET WORTH' },
   level: { id: 'highestLevel', name: 'HIGHEST LEVEL' },
   height: { id: 'heightmaxxed', name: 'HeightMAXXED' },
+  // No existing leaderboard title uses an id prefix (looksmaxxer/highestNetWorth/highestLevel/
+  // heightmaxxed are all bare words) -- kollector matches that convention rather than inventing one.
+  kollector: { id: 'kollector', name: 'KOLLECTOR' },
 };
 
-const LEADERBOARD_CATEGORIES = ['looks', 'networth', 'level', 'height'];
+const LEADERBOARD_CATEGORIES = ['looks', 'networth', 'level', 'height', 'kollector'];
 
 // Mirrors the client's computeLevel() in core.js exactly.
 function computeCharacterLevel(character) {
@@ -3804,6 +3858,7 @@ function leaderboardValue(character, category) {
   if (category === 'looks') return character.stats.looks;
   if (category === 'networth') return computeNetWorth(character);
   if (category === 'height') return character.height;
+  if (category === 'kollector') return gradedCollectionValue(character);
   return computeCharacterLevel(character);
 }
 
@@ -4249,6 +4304,8 @@ module.exports = {
   computeNetWorth,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
+  gradedCollectionValue,
+  foilSlabValue,
   getRemainingCooldown,
   round2,
   round4,
