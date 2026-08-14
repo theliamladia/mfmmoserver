@@ -120,6 +120,8 @@ const {
   getAltcoinMajorityHolder,
   addAltcoinHolding,
   zeroAltcoinHolding,
+  recordCityEvent,
+  getRecentCityEvents,
 } = require('./db');
 const { hashPassword, checkPassword, issueToken, requireAuth, verifyToken } = require('./auth');
 const {
@@ -1091,6 +1093,14 @@ function finishDuel(duel, winnerUserId) {
   saveCharacter(attackerUser.id, attackerCharacter);
   saveCharacter(targetUser.id, targetCharacter);
   updateDuel(duel.id, { status: 'finished', winner_user_id: winnerUserId, last_action_at: Date.now() });
+  try {
+    const loserName = winnerIsAttacker ? `${targetCharacter.firstName} ${targetCharacter.lastName}` : `${attackerCharacter.firstName} ${attackerCharacter.lastName}`;
+    // No cash amount here on purpose -- the duel reward is a PvP transfer from the loser, same
+    // privacy line as robbery/slime amounts, so only the outcome is public flavor.
+    recordCityEvent('duel', `⚔️ ${winnerCharacter.firstName} ${winnerCharacter.lastName} defeated ${loserName} in a duel`);
+  } catch {
+    // Ticker is best-effort flavor -- never let a logging failure break the duel-finish path.
+  }
   return getDuelById(duel.id);
 }
 
@@ -1513,6 +1523,16 @@ app.post('/nmg/reveal', requireAuth, (req, res) => {
   deleteNmgSlot(row.id);
   saveCharacter(user.id, character);
 
+  try {
+    // High-signal only -- every reveal (including low grades) would drown out the rest of the
+    // ticker, so only near-perfect slabs get a city-wide callout.
+    if (grade >= 8) {
+      recordCityEvent('nmg', `💎 ${character.firstName} ${character.lastName} pulled an NMG ${grade} on ${prettifyTitleId(row.title_id)}`);
+    }
+  } catch {
+    // Ticker is best-effort flavor -- never let a logging failure break the reveal route.
+  }
+
   res.json({ ok: true, character, result: { baseTitleId: row.title_id, gradedId, grade } });
 });
 
@@ -1563,6 +1583,14 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'cosmetixxMarket/buy', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
+
+  try {
+    // Purchase price is public flavor here (a market listing, not PvP theft), unlike duel/robbery
+    // amounts -- see the privacy note on recordCityEvent call sites.
+    recordCityEvent('cosmetixxMarket', `🏪 ${character.firstName} ${character.lastName} bought an NMG ${row.grade} ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`);
+  } catch {
+    // Ticker is best-effort flavor -- never let a logging failure break the buy route.
+  }
 
   res.json({ ok: true, character, result: { gradedId, price: row.price } });
 });
@@ -1835,6 +1863,11 @@ app.post('/cityhall/respond', requireAuth, (req, res) => {
   saveCharacter(targetUser.id, targetCharacter);
 
   updateMarriageProposal(proposal.id, { status: 'accepted' });
+  try {
+    recordCityEvent('marriage', `💍 ${proposerCharacter.firstName} ${proposerCharacter.lastName} married ${targetCharacter.firstName} ${targetCharacter.lastName}`);
+  } catch {
+    // Ticker is best-effort flavor -- never let a logging failure break the marriage route.
+  }
   res.json({ ok: true, accepted: true, character: targetCharacter });
 });
 app.post('/cityhall/gun-safety-result', requireAuth, (req, res) => {
@@ -2103,6 +2136,11 @@ app.post('/penitentiary/sync', requireAuth, (req, res) => {
   if (character.jail.inJail) {
     if (!active) {
       createPenitentiaryRecord(user.id, `${character.firstName} ${character.lastName}`, character.jail.crime || 'Crime', character.jail.yearsRemaining);
+      try {
+        recordCityEvent('arrest', `🚨 ${character.firstName} ${character.lastName} got arrested for ${character.jail.crime || 'Crime'}`);
+      } catch {
+        // Ticker is best-effort flavor -- never let a logging failure break the jail sync route.
+      }
     } else if (active.years_remaining !== character.jail.yearsRemaining) {
       updatePenitentiaryYearsRemaining(active.id, character.jail.yearsRemaining);
     }
@@ -2508,6 +2546,32 @@ function serializeChatMessage(row) {
     sentAt: row.sent_at,
   };
 }
+
+// ---------- City Pulse ----------
+// Cosmetic title ids are opaque camelCase/underscore strings (see the "no title catalog" note near
+// isCosmeticInventoryId) -- the server has no display-name lookup for them, so this just turns
+// `animaHyperGear5` / `og_gutter_rat` into "Anima Hyper Gear5" / "Og Gutter Rat" for ticker flavor
+// text. Good enough for a comedic one-liner; not meant to match the client's real title names.
+function prettifyTitleId(titleId) {
+  return String(titleId || '')
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+const CITY_EVENTS_FEED_LIMIT = 30;
+
+app.get('/city/events', requireAuth, (req, res) => {
+  res.json({ ok: true, events: getRecentCityEvents(CITY_EVENTS_FEED_LIMIT).map((row) => ({
+    id: row.id,
+    type: row.type,
+    message: row.message,
+    createdAt: row.created_at,
+  })) });
+});
 
 const CHAT_MESSAGE_MAX_LEN = 500;
 const CHAT_TITLE_MAX_LEN = 40;

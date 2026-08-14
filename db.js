@@ -535,6 +535,37 @@ function pruneOldStockPriceHistory(maxAgeMs) {
   return db.prepare('DELETE FROM stock_price_history WHERE recorded_at < ?').run(cutoff).changes;
 }
 
+// City Pulse ticker: a shared table of short flavor-text events (arrests, NMG reveals,
+// CosmetixxMarket buys, marriages, duel results) so the client can show "the city feels alive"
+// even for a solo player. Same reasoning as chat_messages/transactions -- has to be visible to
+// everyone, not just whoever triggered it. Capped at CITY_EVENTS_LIMIT rows on every insert so this
+// never grows unbounded like the other append-only tables warn about in HANDOFF.md.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS city_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_city_events_created_at ON city_events (created_at)');
+const CITY_EVENTS_LIMIT = 200;
+
+// Callers are expected to wrap this in try/catch -- a ticker insert failing should never break the
+// route that triggered it (see server.js instrumentation points).
+function recordCityEvent(type, message) {
+  db.prepare('INSERT INTO city_events (type, message, created_at) VALUES (?, ?, ?)').run(type, message, Date.now());
+  // Trim beyond the newest CITY_EVENTS_LIMIT rows on every insert -- cheap relative to the insert
+  // itself, and keeps the table from growing unbounded (same class of gap flagged for
+  // character.arrestRecord in HANDOFF.md's open items).
+  db.prepare('DELETE FROM city_events WHERE id NOT IN (SELECT id FROM city_events ORDER BY id DESC LIMIT ?)').run(CITY_EVENTS_LIMIT);
+}
+
+function getRecentCityEvents(limit) {
+  const rows = db.prepare('SELECT * FROM city_events ORDER BY id DESC LIMIT ?').all(limit);
+  return rows.reverse();
+}
+
 function createUser(username, passwordHash, character) {
   const stmt = db.prepare(
     'INSERT INTO users (username, password_hash, character_json, created_at, last_seen) VALUES (?, ?, ?, ?, ?)'
@@ -1252,4 +1283,6 @@ module.exports = {
   getAltcoinMajorityHolder,
   addAltcoinHolding,
   zeroAltcoinHolding,
+  recordCityEvent,
+  getRecentCityEvents,
 };
