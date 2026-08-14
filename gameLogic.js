@@ -313,6 +313,24 @@ const COSMETIXX_MARKET_TITLES = [
   { id: 'mlSuperjailWarden', weight: 8.3, rarity: 'uncommon', crateCost: 20000 },
   { id: 'mlSpecialUnit', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
   { id: 'mlKrogger', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  // ANIMA2_CRATE_TITLES, crateCost 20000
+  { id: 'a2Naruto', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Ichigo', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Tanjiro', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Deku', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Fullmetal', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Chainsaw', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Killua', weight: 10.5, rarity: 'common', crateCost: 20000 },
+  { id: 'a2Levi', weight: 4.5, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'a2Prince', weight: 4.5, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'a2Rumbling', weight: 4.5, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'a2CopyNinja', weight: 4.5, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'a2FlameHashira', weight: 4.5, rarity: 'uncommon', crateCost: 20000 },
+  { id: 'a2OnePunch', weight: 1.3, rarity: 'rare', crateCost: 20000 },
+  { id: 'a2Madara', weight: 1.3, rarity: 'rare', crateCost: 20000 },
+  { id: 'a2DemonKing', weight: 1.3, rarity: 'rare', crateCost: 20000 },
+  { id: 'a2KingOfCurses', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  { id: 'a2SixEyes', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
   // RED_BLUE_HIDDEN_TITLES (mfmmoalpha/js/core.js) -- the secret autographed alternates. A spin that
   // lands on a side's Presidential Rare (weight 5) has a 1% chance to swap in the Auto instead (see
   // hiddenAuto on CRATE_RED/CRATE_BLUE in market.js), so their true pull rate is 5 * 0.01 = 0.05 --
