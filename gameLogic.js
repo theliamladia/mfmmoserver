@@ -313,7 +313,21 @@ const COSMETIXX_MARKET_TITLES = [
   { id: 'mlSuperjailWarden', weight: 8.3, rarity: 'uncommon', crateCost: 20000 },
   { id: 'mlSpecialUnit', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
   { id: 'mlKrogger', weight: 0.05, rarity: 'mythic', crateCost: 20000 },
+  // RED_BLUE_HIDDEN_TITLES (mfmmoalpha/js/core.js) -- the secret autographed alternates. A spin that
+  // lands on a side's Presidential Rare (weight 5) has a 1% chance to swap in the Auto instead (see
+  // hiddenAuto on CRATE_RED/CRATE_BLUE in market.js), so their true pull rate is 5 * 0.01 = 0.05 --
+  // as rare as a Milos Legends mythic, out of crates that are both archived AND supply-exhausted.
+  // They are listed here ONLY so graded Autos can be valued (KOLLECTOR, and the client's
+  // "Est. value" caption); rotationExcluded keeps them out of the purchasable daily rotation, since
+  // being buyable would undo the whole point of a hidden pull that is "deliberately not reflected
+  // anywhere in titles/odds".
+  { id: 'redTrumpAuto', weight: 0.05, rarity: 'mythic', crateCost: 20000, archived: true, rotationExcluded: true },
+  { id: 'blueBidenAuto', weight: 0.05, rarity: 'mythic', crateCost: 20000, archived: true, rotationExcluded: true },
 ];
+
+// The subset the daily rotation may actually stock. Valuation code reads COSMETIXX_MARKET_TITLES
+// directly (everything priceable), the store reads this.
+const COSMETIXX_MARKET_ROTATION_POOL = COSMETIXX_MARKET_TITLES.filter((t) => !t.rotationExcluded);
 
 const COSMETIXX_MARKET_SLOT_COUNT = 5;
 const COSMETIXX_MARKET_ROTATION_MS = 24 * 60 * 60 * 1000;
@@ -413,10 +427,10 @@ function pickDistinctCosmetixxTitles(count) {
   let guard = 0;
   while (picked.length < count && guard < count * 50) {
     guard += 1;
-    const total = COSMETIXX_MARKET_TITLES.reduce((sum, t) => sum + t.weight, 0);
+    const total = COSMETIXX_MARKET_ROTATION_POOL.reduce((sum, t) => sum + t.weight, 0);
     let r = Math.random() * total;
-    let chosen = COSMETIXX_MARKET_TITLES[0];
-    for (const t of COSMETIXX_MARKET_TITLES) {
+    let chosen = COSMETIXX_MARKET_ROTATION_POOL[0];
+    for (const t of COSMETIXX_MARKET_ROTATION_POOL) {
       if (r < t.weight) { chosen = t; break; }
       r -= t.weight;
     }
