@@ -341,6 +341,27 @@ const COSMETIXX_MARKET_TITLES = [
   // anywhere in titles/odds".
   { id: 'redTrumpAuto', weight: 0.05, rarity: 'mythic', crateCost: 20000, archived: true, rotationExcluded: true },
   { id: 'blueBidenAuto', weight: 0.05, rarity: 'mythic', crateCost: 20000, archived: true, rotationExcluded: true },
+  // WAIFU_CRATE_TITLES (mfmmoalpha/js/core.js), crateCost 50000
+  { id: 'wfMakima', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfNezuko', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfMikasa', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfMiku', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfErza', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfAsuna', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfFrieren', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfHinata', weight: 7.5, rarity: 'common', crateCost: 50000 },
+  { id: 'wfZeroTwo', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfRem', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfMarin', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfYor', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfShinobu', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfRobin', weight: 4.65, rarity: 'uncommon', crateCost: 50000 },
+  { id: 'wfBoaHancock', weight: 3, rarity: 'rare', crateCost: 50000 },
+  { id: 'wfMai', weight: 3, rarity: 'rare', crateCost: 50000 },
+  { id: 'wfKurisu', weight: 3, rarity: 'rare', crateCost: 50000 },
+  { id: 'wfTsunade', weight: 3, rarity: 'rare', crateCost: 50000 },
+  { id: 'wfPower', weight: 0.05, rarity: 'mythic', crateCost: 50000 },
+  { id: 'wfRukia', weight: 0.05, rarity: 'mythic', crateCost: 50000 },
 ];
 
 // The subset the daily rotation may actually stock. Valuation code reads COSMETIXX_MARKET_TITLES
