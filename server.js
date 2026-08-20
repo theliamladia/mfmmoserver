@@ -45,6 +45,8 @@ const {
   retireCert,
   updateCertOnRegrade,
   getAllUserIdsAndCharacters,
+  getRegistryCompletion,
+  recordRegistryCompletion,
   getServerState,
   setServerPaused,
   setServerModifier,
@@ -249,6 +251,12 @@ const {
   detachGradedIdFromShowcases,
   COSMETIXX_MARKET_ROTATION_MS,
   generateCosmetixxMarketSlots,
+  REGISTRY_SETS,
+  REGISTRY_REWARD_TITLES,
+  REGISTRY_MASTER_SET_GPA,
+  REGISTRY_PERFECT_SET_GPA,
+  computeBestGradedHoldings,
+  computeSetProgress,
   LEADERBOARD_TITLES,
   computeLeaderboardWinners,
   buildLeaderboardBoard,
@@ -1681,6 +1689,122 @@ app.get('/grading/graders', requireAuth, (req, res) => {
       };
     }),
     crackCost: NMG_CRACK_COST,
+  });
+});
+
+// ---------- Registry Sets ----------
+// Same 60s in-memory cache pattern as Pop Report above, for the same reason: this route aggregates
+// every player's full inventory + MTN listings, so bounding it to once a minute keeps the cost flat
+// no matter how many clients sit on the tab. Completion is ALSO where achievement-title grants
+// happen -- one recompute both answers the request and (idempotently, see the `.includes()` guards
+// below) grants any title a newly-complete or newly-qualifying set has earned. Grants are permanent
+// once written to titles.owned; nothing in this file ever removes registryCollector/masterSet/
+// perfectSet again, including on a later crack that drops the holder below completion -- see the
+// long comment above REGISTRY_REWARD_TITLES in gameLogic.js for why that's the intended design, not
+// an oversight.
+const REGISTRY_CACHE_MS = 60 * 1000;
+let registryCache = { at: 0, payload: null };
+
+function buildRegistrySnapshot() {
+  const now = Date.now();
+  const listings = getAllListings();
+  const listedByUser = new Map();
+  listings.forEach((l) => {
+    if (!isGradedTitleId(l.item_id)) return;
+    if (!listedByUser.has(l.seller_user_id)) listedByUser.set(l.seller_user_id, new Map());
+    const m = listedByUser.get(l.seller_user_id);
+    m.set(l.item_id, (m.get(l.item_id) || 0) + l.qty);
+  });
+
+  const users = getAllUsersForLeaderboard(); // [{ id, username, character_json }]
+  const perCrate = {};
+  REGISTRY_SETS.forEach((s) => { perCrate[s.key] = []; });
+  const progressByUser = new Map();
+  const touched = new Set();
+  const charById = new Map();
+
+  users.forEach((u) => {
+    let character;
+    try {
+      character = JSON.parse(u.character_json);
+    } catch {
+      return; // an unparseable character is a bigger problem than a missed registry check; skip it.
+    }
+    charById.set(u.id, character);
+
+    const bestHoldings = computeBestGradedHoldings(character, listedByUser.get(u.id));
+    const sets = REGISTRY_SETS.map((set) => computeSetProgress(set, bestHoldings));
+    progressByUser.set(u.id, sets);
+
+    sets.forEach((progress) => {
+      if (!progress.complete) return;
+
+      // Stable "who finished first" tiebreak, independent of this 60s cache -- see the table
+      // comment in db.js for why write-once (INSERT OR IGNORE) is exactly right here.
+      let completion = getRegistryCompletion(u.id, progress.key);
+      if (!completion) {
+        recordRegistryCompletion(u.id, progress.key, now);
+        completion = { first_completed_at: now };
+      }
+
+      if (!character.titles.owned.includes(REGISTRY_REWARD_TITLES.registryCollector.id)) {
+        character.titles.owned.push(REGISTRY_REWARD_TITLES.registryCollector.id);
+        touched.add(u.id);
+      }
+      if (progress.gpa >= REGISTRY_MASTER_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.masterSet.id)) {
+        character.titles.owned.push(REGISTRY_REWARD_TITLES.masterSet.id);
+        touched.add(u.id);
+      }
+      if (progress.gpa >= REGISTRY_PERFECT_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.perfectSet.id)) {
+        character.titles.owned.push(REGISTRY_REWARD_TITLES.perfectSet.id);
+        touched.add(u.id);
+      }
+
+      perCrate[progress.key].push({
+        userId: u.id,
+        username: u.username,
+        name: certDisplayName(character),
+        gpa: progress.gpa,
+        graderMix: progress.graderMix,
+        completedAt: completion.first_completed_at,
+      });
+    });
+  });
+
+  touched.forEach((userId) => saveCharacter(userId, charById.get(userId)));
+
+  // Ranked highest GPA first; ties broken by earlier completion time (see the completedAt note
+  // above), matching a real registry's own tiebreak convention.
+  Object.keys(perCrate).forEach((key) => {
+    perCrate[key].sort((a, b) => b.gpa - a.gpa || a.completedAt - b.completedAt);
+  });
+
+  return {
+    generatedAt: now,
+    sets: REGISTRY_SETS.map((s) => ({ key: s.key, name: s.name, total: s.titleIds.length })),
+    registry: perCrate,
+    progressByUser,
+  };
+}
+
+app.get('/grading/registry', requireAuth, (req, res) => {
+  const now = Date.now();
+  if (!registryCache.payload || now - registryCache.at > REGISTRY_CACHE_MS) {
+    registryCache = { at: now, payload: buildRegistrySnapshot() };
+  }
+  const snap = registryCache.payload;
+  const yourProgress = snap.progressByUser.get(req.user.sub)
+    || REGISTRY_SETS.map((s) => ({
+      key: s.key, name: s.name, total: s.titleIds.length, haveCount: 0,
+      missing: s.titleIds, complete: false, gpa: null, graderMix: null,
+    }));
+  res.json({
+    ok: true,
+    generatedAt: snap.generatedAt,
+    sets: snap.sets,
+    yourProgress,
+    registry: snap.registry,
+    cachedAt: registryCache.at,
   });
 });
 

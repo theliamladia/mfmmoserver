@@ -561,6 +561,32 @@ function getAllUserIdsAndCharacters() {
   return db.prepare('SELECT id, character_json FROM users').all();
 }
 
+// ---------- Registry Sets ----------
+// One row per (user, crate) the FIRST time that crate's set was ever observed complete, purely so
+// the public Registry table can rank ties by "who finished first" even though completion itself is
+// detected on a recomputed-from-scratch, non-persistent snapshot (see buildRegistrySnapshot in
+// server.js) rather than stored state. INSERT OR IGNORE makes this write-once: a later recompute
+// that finds the same user/crate complete again (including after a crack-and-reslab round trip)
+// never overwrites the original timestamp, which is the whole point -- the earliest completion date
+// is the one that should stick, same as a real registry's completion date doesn't change just
+// because a card temporarily left the holder.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS registry_completions (
+    user_id INTEGER NOT NULL,
+    crate_key TEXT NOT NULL,
+    first_completed_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, crate_key)
+  );
+`);
+
+function getRegistryCompletion(userId, crateKey) {
+  return db.prepare('SELECT first_completed_at FROM registry_completions WHERE user_id = ? AND crate_key = ?').get(userId, crateKey);
+}
+
+function recordRegistryCompletion(userId, crateKey, at) {
+  db.prepare('INSERT OR IGNORE INTO registry_completions (user_id, crate_key, first_completed_at) VALUES (?, ?, ?)').run(userId, crateKey, at);
+}
+
 // New Milos City chat: a shared table (unlike character_json) since every message needs to be
 // visible to everyone in the room, not just its sender.
 db.exec(`
@@ -1424,6 +1450,8 @@ module.exports = {
   retireCert,
   updateCertOnRegrade,
   getAllUserIdsAndCharacters,
+  getRegistryCompletion,
+  recordRegistryCompletion,
   CERT_HISTORY_MAX,
   getServerState,
   setServerPaused,

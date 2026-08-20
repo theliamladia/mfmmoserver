@@ -620,6 +620,115 @@ function findGradedCollectionEntry(preGradeId) {
   return { titleEntry, isFoil: !!foilMatch };
 }
 
+// ---------- Registry Sets (PSA Set Registry parody) ----------
+// Complete a graded slab (any grader, any grade) of EVERY title in a crate and you've "completed
+// the set" -- same collector's-registry idea as the real PSA product. Grouped off
+// COSMETIXX_MARKET_TITLES, the same catalog buildPopReport/CosmetixxMarket/KOLLECTOR already treat
+// as the authority for "what titles exist and what crate they came from" -- every id in that
+// catalog carries its crate's short prefix (anima/cf/red/blue/llg/ml/a2/wf, see the comment blocks
+// above the catalog itself), so grouping by prefix reproduces the real crate boundaries with no
+// second source of truth to drift out of sync. Open Beta / GOOD Season 1 have no entries in that
+// catalog at all (excluded by design, see the note above it), so they get no registry set either --
+// consistent with every other surface (Pop Report, CosmetixxMarket, KOLLECTOR) that already treats
+// catalog membership as the on/off switch. RED/BLUE's hidden Autos are `rotationExcluded` and are
+// deliberately left OUT of those two sets' required title lists below -- they're an unlisted ~0.05%
+// secret pull from an archived, supply-exhausted crate, and requiring one would make RED/BLUE
+// registry completion realistically impossible instead of just hard.
+const REGISTRY_CRATE_DEFS = [
+  { key: 'anima', name: 'ANIMA CRATE', prefix: 'anima' },
+  { key: 'counterfinish', name: 'COUNTERFINISH CRATE', prefix: 'cf' },
+  { key: 'red', name: 'RED CRATE', prefix: 'red' },
+  { key: 'blue', name: 'BLUE CRATE', prefix: 'blue' },
+  { key: 'llg', name: 'LEEMS LARUDO x GOOD®', prefix: 'llg' },
+  { key: 'milosLegends', name: 'MILOS LEGENDS 1', prefix: 'ml' },
+  { key: 'anima2', name: 'ANIMA 2 CRATE', prefix: 'a2' },
+  { key: 'waifu', name: 'WAIFU CRATE', prefix: 'wf' },
+];
+
+// Computed once at module load -- COSMETIXX_MARKET_TITLES is a static literal, never mutated at
+// runtime, so there is nothing to keep this in sync with beyond re-running this map, which happens
+// automatically on every process start (i.e. every deploy that touches the catalog).
+const REGISTRY_SETS = REGISTRY_CRATE_DEFS
+  .map((def) => ({
+    key: def.key,
+    name: def.name,
+    titleIds: COSMETIXX_MARKET_TITLES
+      .filter((t) => !t.rotationExcluded && t.id.startsWith(def.prefix))
+      .map((t) => t.id),
+  }))
+  .filter((c) => c.titleIds.length > 0);
+
+// Achievement-title pattern (see maybeGrantAchievementTitle above): server only needs the id string,
+// matching a client-side hardcoded def. No rarity/cost on any of the three -- same as PEAK CIVILIAN
+// et al -- so they are unsellable and unprestigeable by construction, and PERMANENT once earned: a
+// later crack that drops a player below completion does not strip the title back off. Real
+// registries don't unring the bell either -- once a set graded PSA 10 across the board, that
+// player's name stays on the all-time list even if they later crack a card out of the holder.
+const REGISTRY_REWARD_TITLES = {
+  registryCollector: { id: 'registryCollector', name: 'REGISTRY COLLECTOR' },
+  masterSet: { id: 'masterSet', name: 'MASTER SET' },
+  perfectSet: { id: 'perfectSet', name: 'PERFECT SET' },
+};
+const REGISTRY_MASTER_SET_GPA = 8;
+const REGISTRY_PERFECT_SET_GPA = 10;
+
+// A user's best-graded holding per base (catalog) title id, from inventory + escrowed MTN listings.
+// `listedQty` is a Map of itemId -> qty, the caller's per-user slice of the MTN listings table -- a
+// listed slab is still escrow, not a sale, so it counts (same convention reconcileCerts() uses for
+// the exact same reason: doCreateListing() escrows the stack out of character.inventory, and not
+// counting it here would make listing a slab for sale silently break your own set). Foil and
+// prestiged slabs resolve to their base title via findGradedCollectionEntry(), which already strips
+// both -- reused rather than re-implemented.
+function computeBestGradedHoldings(character, listedQty) {
+  const held = new Map();
+  (character.inventory || []).forEach((stack) => {
+    if (stack.qty > 0 && isGradedTitleId(stack.id)) held.set(stack.id, (held.get(stack.id) || 0) + stack.qty);
+  });
+  if (listedQty) {
+    listedQty.forEach((qty, id) => {
+      if (isGradedTitleId(id)) held.set(id, (held.get(id) || 0) + qty);
+    });
+  }
+
+  const best = new Map(); // catalog titleId -> { grade, grader }
+  held.forEach((qty, gradedId) => {
+    const parsed = parseGradedId(gradedId);
+    if (!parsed) return;
+    const { titleEntry } = findGradedCollectionEntry(parsed.preGradeId);
+    if (!titleEntry) return;
+    const cur = best.get(titleEntry.id);
+    // Best COPY counts, like a real registry -- keep the higher grade on a tie-break-free compare
+    // (equal grades just keep whichever was seen first, which is fine: they're interchangeable).
+    if (!cur || parsed.grade > cur.grade) best.set(titleEntry.id, { grade: parsed.grade, grader: parsed.grader });
+  });
+  return best;
+}
+
+// Progress (and, if complete, GPA/grader-mix) for one crate set against one user's best holdings.
+// GPA is the mean of the best grade held per title -- "best copy counts" is the whole point of
+// tracking best-by-title above instead of just checking "owns at least one".
+function computeSetProgress(set, bestHoldings) {
+  const have = [];
+  const missing = [];
+  set.titleIds.forEach((id) => {
+    const h = bestHoldings.get(id);
+    if (h) have.push({ id, grade: h.grade, grader: h.grader });
+    else missing.push(id);
+  });
+  const complete = missing.length === 0;
+  let gpa = null;
+  let graderMix = null;
+  if (complete) {
+    gpa = round2(have.reduce((sum, h) => sum + h.grade, 0) / have.length);
+    graderMix = {};
+    have.forEach((h) => { graderMix[h.grader] = (graderMix[h.grader] || 0) + 1; });
+  }
+  return {
+    key: set.key, name: set.name, total: set.titleIds.length, haveCount: have.length,
+    missing, complete, gpa, graderMix,
+  };
+}
+
 // ---------- Crack a Slab ----------
 // Cracking used to be entirely client-side (js/nmg.js crackNmgTitle) on the reasoning that it has
 // no timing or pricing property worth protecting. The cert registry changes that: a crack RETIRES a
@@ -4642,6 +4751,12 @@ module.exports = {
   COSMETIXX_MARKET_SLOT_COUNT,
   COSMETIXX_MARKET_ROTATION_MS,
   generateCosmetixxMarketSlots,
+  REGISTRY_SETS,
+  REGISTRY_REWARD_TITLES,
+  REGISTRY_MASTER_SET_GPA,
+  REGISTRY_PERFECT_SET_GPA,
+  computeBestGradedHoldings,
+  computeSetProgress,
   clampStat,
   NPC_TYPES,
   COOLDOWN_MS,
