@@ -1693,15 +1693,23 @@ app.get('/grading/graders', requireAuth, (req, res) => {
 });
 
 // ---------- Registry Sets ----------
-// Same 60s in-memory cache pattern as Pop Report above, for the same reason: this route aggregates
-// every player's full inventory + MTN listings, so bounding it to once a minute keeps the cost flat
-// no matter how many clients sit on the tab. Completion is ALSO where achievement-title grants
-// happen -- one recompute both answers the request and (idempotently, see the `.includes()` guards
-// below) grants any title a newly-complete or newly-qualifying set has earned. Grants are permanent
-// once written to titles.owned; nothing in this file ever removes registryCollector/masterSet/
-// perfectSet again, including on a later crack that drops the holder below completion -- see the
-// long comment above REGISTRY_REWARD_TITLES in gameLogic.js for why that's the intended design, not
-// an oversight.
+// Same 60s in-memory cache pattern as Pop Report above, for the same reason: the public ranked
+// board aggregates every player's full inventory + MTN listings, so bounding it to once a minute
+// keeps the cost flat no matter how many clients sit on the tab.
+//
+// buildRegistrySnapshot() is READ-ONLY with one narrow exception (recordRegistryCompletion, see
+// below) -- it must never call saveCharacter(). An earlier version granted achievement titles for
+// EVERY complete set it found while walking all users, batching the writes at the end of the same
+// pass that read them at the top. That is a stale-read/blind-write bug: `charById` snapshots each
+// user's character at read time, and the blind `UPDATE users SET character_json = ?` in
+// saveCharacter() (db.js) has no compare-and-swap, so anything a bystander did between this cache's
+// read and its write -- cash earned, an item bought, a duel resolved -- got silently reverted the
+// next time someone else's request happened to trigger a recompute. Caught in review before any
+// player actually completed a set (registry_completions was still empty), but real: an unattributable
+// rollback on a live economy, on a route nobody would think to suspect because it's a GET.
+// See applyRegistryGrantsForUser() below for the fix -- grants are now scoped to the ONE user making
+// the request, read-modify-write immediately adjacent with no window for anyone else's write to land
+// in between.
 const REGISTRY_CACHE_MS = 60 * 1000;
 let registryCache = { at: 0, payload: null };
 
@@ -1720,8 +1728,6 @@ function buildRegistrySnapshot() {
   const perCrate = {};
   REGISTRY_SETS.forEach((s) => { perCrate[s.key] = []; });
   const progressByUser = new Map();
-  const touched = new Set();
-  const charById = new Map();
 
   users.forEach((u) => {
     let character;
@@ -1730,7 +1736,6 @@ function buildRegistrySnapshot() {
     } catch {
       return; // an unparseable character is a bigger problem than a missed registry check; skip it.
     }
-    charById.set(u.id, character);
 
     const bestHoldings = computeBestGradedHoldings(character, listedByUser.get(u.id));
     const sets = REGISTRY_SETS.map((set) => computeSetProgress(set, bestHoldings));
@@ -1740,24 +1745,15 @@ function buildRegistrySnapshot() {
       if (!progress.complete) return;
 
       // Stable "who finished first" tiebreak, independent of this 60s cache -- see the table
-      // comment in db.js for why write-once (INSERT OR IGNORE) is exactly right here.
+      // comment in db.js for why write-once (INSERT OR IGNORE) is exactly right here. This is the
+      // one write buildRegistrySnapshot() is allowed to make for a user other than the requester:
+      // registry_completions is a dedicated append-only table with no compare-and-swap hazard --
+      // unlike character_json, nothing else ever updates a given (user_id, crate_key) row, so two
+      // concurrent recomputes racing here just both no-op past the first INSERT.
       let completion = getRegistryCompletion(u.id, progress.key);
       if (!completion) {
         recordRegistryCompletion(u.id, progress.key, now);
         completion = { first_completed_at: now };
-      }
-
-      if (!character.titles.owned.includes(REGISTRY_REWARD_TITLES.registryCollector.id)) {
-        character.titles.owned.push(REGISTRY_REWARD_TITLES.registryCollector.id);
-        touched.add(u.id);
-      }
-      if (progress.gpa >= REGISTRY_MASTER_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.masterSet.id)) {
-        character.titles.owned.push(REGISTRY_REWARD_TITLES.masterSet.id);
-        touched.add(u.id);
-      }
-      if (progress.gpa >= REGISTRY_PERFECT_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.perfectSet.id)) {
-        character.titles.owned.push(REGISTRY_REWARD_TITLES.perfectSet.id);
-        touched.add(u.id);
       }
 
       perCrate[progress.key].push({
@@ -1770,8 +1766,6 @@ function buildRegistrySnapshot() {
       });
     });
   });
-
-  touched.forEach((userId) => saveCharacter(userId, charById.get(userId)));
 
   // Ranked highest GPA first; ties broken by earlier completion time (see the completedAt note
   // above), matching a real registry's own tiebreak convention.
@@ -1787,13 +1781,63 @@ function buildRegistrySnapshot() {
   };
 }
 
+// Grants are scoped to exactly one user (the caller) and done with a fresh read immediately
+// adjacent to the write -- no other request's read of this same row can land in between, so there
+// is no stale-write window the way there was when this lived inside the shared, cached, all-users
+// snapshot above. Runs on every request (not cached): it's a single-row read + at most a single-row
+// write, cheap compared to the all-user aggregate, and the immediacy is a real UX improvement too --
+// a player sees their title the moment they open the tab that completed it, rather than waiting out
+// up to 60s of someone else's cache. Returns this user's fresh progress array so the route can serve
+// it without depending on the (possibly stale) cached snapshot for the one thing that must not be
+// stale: whether the requester themselves just finished a set.
+function applyRegistryGrantsForUser(userId) {
+  const user = getUserById(userId);
+  if (!user) return null;
+  let character;
+  try {
+    character = JSON.parse(user.character_json);
+  } catch {
+    return null;
+  }
+
+  const bestHoldings = computeBestGradedHoldings(character, getListingsBySeller(userId)
+    .reduce((m, l) => {
+      if (isGradedTitleId(l.item_id)) m.set(l.item_id, (m.get(l.item_id) || 0) + l.qty);
+      return m;
+    }, new Map()));
+  const sets = REGISTRY_SETS.map((set) => computeSetProgress(set, bestHoldings));
+
+  const now = Date.now();
+  let touched = false;
+  sets.forEach((progress) => {
+    if (!progress.complete) return;
+    if (!getRegistryCompletion(userId, progress.key)) recordRegistryCompletion(userId, progress.key, now);
+
+    if (!character.titles.owned.includes(REGISTRY_REWARD_TITLES.registryCollector.id)) {
+      character.titles.owned.push(REGISTRY_REWARD_TITLES.registryCollector.id);
+      touched = true;
+    }
+    if (progress.gpa >= REGISTRY_MASTER_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.masterSet.id)) {
+      character.titles.owned.push(REGISTRY_REWARD_TITLES.masterSet.id);
+      touched = true;
+    }
+    if (progress.gpa >= REGISTRY_PERFECT_SET_GPA && !character.titles.owned.includes(REGISTRY_REWARD_TITLES.perfectSet.id)) {
+      character.titles.owned.push(REGISTRY_REWARD_TITLES.perfectSet.id);
+      touched = true;
+    }
+  });
+
+  if (touched) saveCharacter(userId, character);
+  return sets;
+}
+
 app.get('/grading/registry', requireAuth, (req, res) => {
   const now = Date.now();
   if (!registryCache.payload || now - registryCache.at > REGISTRY_CACHE_MS) {
     registryCache = { at: now, payload: buildRegistrySnapshot() };
   }
   const snap = registryCache.payload;
-  const yourProgress = snap.progressByUser.get(req.user.sub)
+  const yourProgress = applyRegistryGrantsForUser(req.user.sub)
     || REGISTRY_SETS.map((s) => ({
       key: s.key, name: s.name, total: s.titleIds.length, haveCount: 0,
       missing: s.titleIds, complete: false, gpa: null, graderMix: null,
