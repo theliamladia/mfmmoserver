@@ -86,13 +86,84 @@ const BANK_TIERS = [
 const BANK_CREDIT_LIMIT_PCT = 0.5;
 const CAESAR_TI_TITLE_ID = 'caesarTi';
 
-// ---------- New Milos Grading (NMG) ----------
+// ---------- Grading District: three competing graders ----------
+// What used to be "NMG" alone is now three rival grading authorities sharing one submission
+// pipeline (the same 4 slots, the same slot table, the same reveal route). They differ only in
+// price, id suffix, cert series, whether they roll SUBGAINS, and how much the market trusts them.
+//
+//   ccg  Cheap Cool Grading      -- 60% cheaper than NMG. Grade only. Market discounts it 0.5x.
+//   nmg  New Milos Grading       -- the incumbent everyman grader. Grade only. The 1.0x baseline.
+//   mga  Milos Grading Assoc.    -- triple NMG's price. Rolls SUBGAINS. Black Label lives here only.
+//
+// Every grader-specific fact lives in this one table so no other code has to branch on a grader
+// string, and so a fourth grader would be a data change rather than a code change.
 const NMG_MAX_SLOTS = 4;
-const NMG_TIERS = {
-  '3hr': { cost: 5000, ms: 3 * 60 * 60 * 1000 },
-  '1hr': { cost: 10000, ms: 60 * 60 * 1000 },
-  '10min': { cost: 20000, ms: 10 * 60 * 1000 },
+
+const GRADERS = {
+  ccg: {
+    id: 'ccg',
+    suffix: '_ccg',
+    name: 'Cheap Cool Grading',
+    short: 'CCG',
+    pitch: 'Cheap. Cool. Graded. No notes.',
+    subgains: false,
+    blackLabel: false,
+    // See the valuation note on GRADER_VALUE_MULT below -- this is an economy decision, not flavor.
+    valueMult: 0.5,
+    tiers: {
+      '3hr': { cost: 2000, ms: 3 * 60 * 60 * 1000 },
+      '1hr': { cost: 4000, ms: 60 * 60 * 1000 },
+      '10min': { cost: 8000, ms: 10 * 60 * 1000 },
+    },
+    // CCG regrades deliberately do NOT use the 60%-of-(crack + tier) rule the other two use -- see
+    // the long note above NMG_REGRADE_FEES. Flat 2x the tier fee.
+    regradeFees: { '3hr': 4000, '1hr': 8000, '10min': 16000 },
+  },
+  nmg: {
+    id: 'nmg',
+    suffix: '_nmg',
+    name: 'New Milos Grading',
+    short: 'NMG',
+    pitch: 'The standard. Everybody\'s first slab.',
+    subgains: false,
+    blackLabel: false,
+    valueMult: 1,
+    tiers: {
+      '3hr': { cost: 5000, ms: 3 * 60 * 60 * 1000 },
+      '1hr': { cost: 10000, ms: 60 * 60 * 1000 },
+      '10min': { cost: 20000, ms: 10 * 60 * 1000 },
+    },
+    regradeFees: { '3hr': 33000, '1hr': 36000, '10min': 42000 },
+  },
+  mga: {
+    id: 'mga',
+    suffix: '_mga',
+    name: 'Milos Grading Association',
+    short: 'MGA',
+    pitch: 'Triple the price, and they\'ll tell you your stitching is a 9.',
+    subgains: true,
+    blackLabel: true,
+    valueMult: 1,
+    tiers: {
+      '3hr': { cost: 15000, ms: 3 * 60 * 60 * 1000 },
+      '1hr': { cost: 30000, ms: 60 * 60 * 1000 },
+      '10min': { cost: 60000, ms: 10 * 60 * 1000 },
+    },
+    regradeFees: { '3hr': 39000, '1hr': 48000, '10min': 66000 },
+  },
 };
+
+const GRADER_IDS = Object.keys(GRADERS);
+const DEFAULT_GRADER = 'nmg';
+
+function getGrader(graderId) {
+  return GRADERS[String(graderId || '').toLowerCase()] || null;
+}
+
+// Back-compat alias. Everything that used to say NMG_TIERS meant "the only grader's tiers"; the
+// routes now resolve tiers off the chosen grader instead. Kept exported because the client's own
+// mirrored constants and the admin surface still reference the NMG ladder by name.
+const NMG_TIERS = GRADERS.nmg.tiers;
 
 // Same convention as the client's PRESTIGE_ID_RE (mfmmoalpha/js/core.js:561) -- duplicated here
 // since the server shares no code with the client -- so a prestiged stack (e.g. `cfHyperSapphire_p2`)
@@ -103,18 +174,36 @@ function nmgBaseIdOf(stackId) {
   return m ? m[1] : stackId;
 }
 
-// A revealed grade is permanently baked into the id itself (see the client's NMG_ID_RE in
+// A revealed grade is permanently baked into the id itself (see the client's GRADED_ID_RE in
 // js/core.js) -- this is how the Portfolio Showcase and Player Market (below) tell a graded slab
 // apart from any other opaque, client-trusted title id without needing a title catalog of their own.
-const NMG_GRADED_ID_RE = /^.+_nmg\d{1,2}$/;
+//
+// THREE grader suffixes now share this shape: `_nmg7`, `_mga7`, `_ccg7`. Disjointness against the
+// other synthesized id shapes, verified on both sides of the client/server mirror:
+//   * `_p\d+`   (prestige)  -- requires the literal `_p` immediately before the trailing digits.
+//                              `x_mga7` ends `a7`, `x_ccg7` ends `g7`: neither matches. And a
+//                              graded prestige id (`cfRuby_p2_mga7`) ends with the GRADE digits,
+//                              so it never matches the prestige regex either -- which is exactly
+//                              why the graded branch must be tried first in getItemDef().
+//   * `_foil`   (foil)      -- literal word, no trailing digits. Cannot match a digit-terminated
+//                              suffix, and `_foil_mga7`/`_foil_ccg7` compose exactly like
+//                              `_foil_nmg7` does: the graded branch strips the grade and hands
+//                              `${base}_foil` back to the foil branch.
+//   * each other            -- the three suffixes are distinct 4-char literals (`_nmg`/`_mga`/
+//                              `_ccg`); the alternation below is anchored so only one can match.
+// No base title id in any catalog contains an underscore, so no base id can end in `_nmg`/`_mga`/
+// `_ccg` and be mistaken for a suffix.
+const NMG_GRADED_ID_RE = /^.+_(?:nmg|mga|ccg)\d{1,2}$/;
 // Capturing variant -- Regrade (below) needs the pre-grade id back so it can re-mint the slab with
 // a fresh suffix. Deliberately NOT nmgBaseIdOf(): that one also strips a `_p2` prestige level, which
 // is right for the "which title is this, really" eligibility check but wrong here, where a regraded
 // `cfRuby_p2_nmg7` must come back as `cfRuby_p2_nmg4`, not `cfRuby_nmg4`.
-const NMG_GRADED_ID_CAPTURE_RE = /^(.+)_nmg(\d{1,2})$/;
+const NMG_GRADED_ID_CAPTURE_RE = /^(.+)_(nmg|mga|ccg)(\d{1,2})$/;
 function isGradedTitleId(itemId) {
   return NMG_GRADED_ID_RE.test(String(itemId || ''));
 }
+
+// (Disjointness is asserted at module load just below the Foil constants, once FOIL_ID_RE exists.)
 
 // ---------- Foil Ascension ----------
 // Burn 3 copies of one plain title + $25,000 -> 1 Foil. A cosmetic sink whose real job is removing
@@ -137,6 +226,27 @@ const FOIL_ASCENSION_COST = 25000;
 function isFoilTitleId(itemId) {
   return FOIL_ID_RE.test(String(itemId || ''));
 }
+
+// Assert the id-shape disjointness claimed above NMG_GRADED_ID_RE at module load, so a future
+// suffix change can never quietly break it. Runs here (not there) only because FOIL_ID_RE is a
+// `const` declared in this section -- referencing it earlier would hit the temporal dead zone.
+(function assertGradedIdShapesAreDisjoint() {
+  const samples = ['cfRuby', 'cfRuby_p2', 'cfRuby_foil', 'cfRuby_p2_foil'];
+  GRADER_IDS.forEach((g) => {
+    samples.forEach((base) => {
+      [1, 7, 10].forEach((grade) => {
+        const id = `${base}${GRADERS[g].suffix}${grade}`;
+        if (NMG_PRESTIGE_ID_RE.test(id)) throw new Error(`Graded id ${id} collides with the prestige id shape.`);
+        if (FOIL_ID_RE.test(id)) throw new Error(`Graded id ${id} collides with the foil id shape.`);
+        const parsed = NMG_GRADED_ID_CAPTURE_RE.exec(id);
+        if (!parsed || parsed[1] !== base || parsed[2] !== g || Number(parsed[3]) !== grade) {
+          throw new Error(`Graded id ${id} does not round-trip through NMG_GRADED_ID_CAPTURE_RE.`);
+        }
+      });
+      if (isGradedTitleId(base)) throw new Error(`${base} must not read as a graded id.`);
+    });
+  });
+})();
 
 function doFoilAscension(character, stackId) {
   const id = String(stackId || '');
@@ -181,25 +291,91 @@ function doFoilAscension(character, stackId) {
 // so the two can never silently drift apart.
 const NMG_REGRADE_CRACK_COST = 50000; // mirrors the client's NMG_CRACK_COST
 const NMG_REGRADE_DISCOUNT = 0.6;
-const NMG_REGRADE_FEES = { '3hr': 33000, '1hr': 36000, '10min': 42000 };
+const NMG_REGRADE_FEES = GRADERS.nmg.regradeFees;
 
-Object.keys(NMG_TIERS).forEach((tier) => {
-  const fee = NMG_REGRADE_FEES[tier];
-  const ceiling = NMG_REGRADE_CRACK_COST + NMG_TIERS[tier].cost;
-  if (!(fee > 0 && fee < ceiling)) {
-    throw new Error(`NMG regrade fee for "${tier}" ($${fee}) must be below crack+tier ($${ceiling}).`);
-  }
+// The invariant that actually matters is the same for all three graders: REGRADING MUST COST LESS
+// THAN CRACK ($50,000) + RESUBMIT AT THE SAME TIER AND GRADER. Asserted below for every grader.
+//
+// How each grader's number is derived differs, deliberately:
+//   NMG  0.60 x (crack + tier)   ->  33,000 / 36,000 / 42,000   (vs 55k / 60k / 70k)
+//   MGA  0.60 x (crack + tier)   ->  39,000 / 48,000 / 66,000   (vs 65k / 80k / 110k)
+//   CCG  2 x tier                ->   4,000 /  8,000 / 16,000   (vs 52k / 54k / 58k)
+//
+// CCG breaks the 60%-of-(crack+tier) formula on purpose. Applying it would give 31,200 / 32,400 /
+// 34,800 -- between 4x and 15x CCG's own grading fee -- which is absurd for the grader whose entire
+// identity is "affordable slabs to flex", and would make the intended play (just grade another one)
+// strictly better than regrading at every tier. The formula was only ever a way to satisfy the
+// crack-parity invariant; at CCG's price point a flat 2x the tier undercuts crack+resubmit by
+// 92-97% and still costs meaningfully more than grading a fresh copy, which is the right shape.
+Object.entries(GRADERS).forEach(([graderId, grader]) => {
+  Object.keys(grader.tiers).forEach((tier) => {
+    const fee = grader.regradeFees[tier];
+    const ceiling = NMG_REGRADE_CRACK_COST + grader.tiers[tier].cost;
+    if (!(fee > 0 && fee < ceiling)) {
+      throw new Error(`${graderId} regrade fee for "${tier}" ($${fee}) must be below crack+tier ($${ceiling}).`);
+    }
+  });
 });
 
-function nmgRegradeFee(tier) {
-  return NMG_REGRADE_FEES[tier] ?? null;
+function nmgRegradeFee(tier, graderId = DEFAULT_GRADER) {
+  const grader = getGrader(graderId);
+  if (!grader) return null;
+  return grader.regradeFees[tier] ?? null;
 }
 
-// Splits `${preGradeId}_nmg${grade}` back into its two parts, or null if the id isn't a slab.
+// Splits `${preGradeId}${graderSuffix}${grade}` back into its parts, or null if the id isn't a slab.
+// `grader` is one of GRADER_IDS. Callers written before the three-grader split only read
+// preGradeId/grade and keep working unchanged.
 function parseGradedId(itemId) {
   const m = NMG_GRADED_ID_CAPTURE_RE.exec(String(itemId || ''));
   if (!m) return null;
-  return { preGradeId: m[1], grade: Number(m[2]) };
+  const grade = Number(m[3]);
+  if (!(grade >= 1 && grade <= 10)) return null;
+  return { preGradeId: m[1], grader: m[2], grade };
+}
+
+// ---------- SUBGAINS (MGA only) ----------
+// MGA doesn't just hand you a number, it itemizes: four component scores -- Gloss, Stitching, Aura,
+// Drip -- rolled at reveal alongside the main grade. Each is clamped to (main grade +/- 2, floor 1,
+// ceiling 10) and weighted hard toward the main grade, so the subgains read as a breakdown OF the
+// grade rather than four independent rolls that happen to sit next to it.
+//
+// Weight by distance from the main grade: 11 / 6 / 3 for d = 0 / 1 / 2.
+// For a main grade of 10 the allowed set is {8,9,10} (d = 2,1,0), total weight 20, so
+//   P(sub = 10) = 11/20 = 0.55  and  P(all four = 10) = 0.55^4 = 0.0915.
+// That is BLACK LABEL: ~9.2% of MGA 10s, i.e. ~0.18% of all MGA submissions once NMG_GRADE_WEIGHTS'
+// 2% chance of a 10 is folded in (~1 in 545). Rare enough to be the real chase, common enough that
+// a dedicated player will actually see one.
+const SUBGAIN_KEYS = ['gloss', 'stitch', 'aura', 'drip'];
+const SUBGAIN_LABELS = { gloss: 'Gloss', stitch: 'Stitching', aura: 'Aura', drip: 'Drip' };
+const SUBGAIN_SPREAD = 2;
+const SUBGAIN_DISTANCE_WEIGHTS = [11, 6, 3]; // index = |sub - main|
+
+function rollSubgain(mainGrade) {
+  const candidates = [];
+  let total = 0;
+  for (let v = Math.max(1, mainGrade - SUBGAIN_SPREAD); v <= Math.min(10, mainGrade + SUBGAIN_SPREAD); v += 1) {
+    const w = SUBGAIN_DISTANCE_WEIGHTS[Math.abs(v - mainGrade)];
+    candidates.push({ v, w });
+    total += w;
+  }
+  let r = Math.random() * total;
+  for (const c of candidates) {
+    if (r < c.w) return c.v;
+    r -= c.w;
+  }
+  return mainGrade;
+}
+
+// Returns { gloss, stitch, aura, drip, blackLabel } for a grader that rolls subgains, or null for
+// one that doesn't (CCG/NMG certs carry NULL subgain columns by definition, not just legacy ones).
+function rollSubgains(graderId, mainGrade) {
+  const grader = getGrader(graderId);
+  if (!grader || !grader.subgains) return null;
+  const subs = {};
+  SUBGAIN_KEYS.forEach((k) => { subs[k] = rollSubgain(mainGrade); });
+  subs.blackLabel = !!grader.blackLabel && mainGrade === 10 && SUBGAIN_KEYS.every((k) => subs[k] === 10);
+  return subs;
 }
 
 // The old graded id ceases to exist the moment a regrade is submitted, so anything that pins a slab
@@ -444,6 +620,79 @@ function findGradedCollectionEntry(preGradeId) {
   return { titleEntry, isFoil: !!foilMatch };
 }
 
+// ---------- Crack a Slab ----------
+// Cracking used to be entirely client-side (js/nmg.js crackNmgTitle) on the reasoning that it has
+// no timing or pricing property worth protecting. The cert registry changes that: a crack RETIRES a
+// cert, and a retirement the server never hears about is a permanent, silent Pop Report lie. So
+// crack now has a real route, and the client calls it instead of mutating locally.
+// Cost and outcome are otherwise identical to the old client-side version.
+const NMG_CRACK_COST = NMG_REGRADE_CRACK_COST;
+
+function doCrackSlab(character, stackId) {
+  const id = String(stackId || '');
+  const parsed = parseGradedId(id);
+  if (!parsed) return { ok: false, reason: 'That is not a graded slab.' };
+  if (inventoryQty(character, id) < 1) return { ok: false, reason: "You don't own that slab." };
+  if (character.cash < NMG_CRACK_COST) return { ok: false, reason: 'Not enough Floydbucks.' };
+
+  character.cash = round2(character.cash - NMG_CRACK_COST);
+  removeFromInventory(character, id, 1);
+  addToInventory(character, parsed.preGradeId, 1);
+  // Same cleanup regrade does -- the graded id ceases to exist, so nothing may keep pinning it.
+  detachGradedIdFromShowcases(character, id);
+  return {
+    ok: true,
+    message: 'Slab cracked. The title is equippable again.',
+    cls: 'loss',
+    character,
+    crackedId: id,
+    preGradeId: parsed.preGradeId,
+    grader: parsed.grader,
+  };
+}
+
+// ---------- First Edition ----------
+// A cert is stamped FIRST EDITION at mint if the slab's source crate was NOT archived at that
+// moment. Checked at mint time, never re-derived, so when a crate archives later its already-issued
+// FE certs keep the stamp and everything graded afterwards simply doesn't get one -- no code runs at
+// archive time at all, the `archived` flags in COSMETIXX_MARKET_TITLES are the only switch.
+//
+// DOCUMENTED EDGE CASE: Open Beta and GOOD(R) Season 1 titles are deliberately absent from
+// COSMETIXX_MARKET_TITLES (they have no market price -- see the note above that catalog), so a
+// lookup for them returns nothing. "Not in the catalog" is treated as ARCHIVED for FE purposes,
+// i.e. no First Edition stamp. That is the conservative reading (FE is a scarcity flex; handing it
+// out for titles the catalog can't even price would cheapen it) and it matches those two crates'
+// real status -- both are long since unpurchasable.
+function isFirstEditionEligible(preGradeId) {
+  const { titleEntry } = findGradedCollectionEntry(preGradeId);
+  if (!titleEntry) return false;
+  return !titleEntry.archived;
+}
+
+// ---------- Grader trust multiplier ----------
+// Applied to the CosmetixxMarket-equivalent value of a slab, in gradedCollectionValue() (KOLLECTOR)
+// and mirrored in the client's estimatedSlabValue() ("Est. value" caption). Three deliberate calls:
+//
+//   NMG 1.0x  -- the baseline the whole pricing model was built against. Unchanged.
+//   MGA 1.0x  -- NO premium, even though MGA costs 3x to grade at and rolls subgains. Grading fees
+//                were never an input to slab value for NMG either (the formula prices the TITLE and
+//                the GRADE, not what you paid the grader), and a Black Label premium should emerge
+//                from what players will actually pay each other on MTN, not be minted by the
+//                algorithm. Baking it in would also make MGA the mandatory KOLLECTOR play.
+//   CCG 0.5x  -- a real discount, and the one place a grader changes value. At parity, CCG's 60%
+//                discount would make it strictly dominant for KOLLECTOR value-farming: identical
+//                score for 40% of the cash, which kills NMG grading outright. In-universe the
+//                market simply doesn't take a CCG slab seriously -- they are affordable slabs to
+//                flex, and the leaderboard prices them that way.
+//
+// Note this is NOT pop-scaled: value stays supply-blind by explicit owner decision (pop-scaled
+// value creates hoarding feedback loops and crack-your-rival manipulation). The multiplier is a
+// fixed per-grader constant, known in advance, not a function of the cert registry.
+function graderValueMult(graderId) {
+  const grader = getGrader(graderId);
+  return grader ? grader.valueMult : 1;
+}
+
 function gradedCollectionValue(character) {
   let total = 0;
   (character.inventory || []).forEach((stack) => {
@@ -452,7 +701,8 @@ function gradedCollectionValue(character) {
     if (!parsed) return; // not a graded slab at all
     const { titleEntry, isFoil } = findGradedCollectionEntry(parsed.preGradeId);
     if (!titleEntry) return; // Open Beta / GOOD Season 1 / unknown id -- no market price
-    const unitValue = isFoil ? foilSlabValue(titleEntry, parsed.grade) : cosmetixxSlabPrice(titleEntry, parsed.grade);
+    const raw = isFoil ? foilSlabValue(titleEntry, parsed.grade) : cosmetixxSlabPrice(titleEntry, parsed.grade);
+    const unitValue = Math.round(raw * graderValueMult(parsed.grader));
     total += unitValue * stack.qty;
   });
   return round2(total);
@@ -4367,6 +4617,17 @@ module.exports = {
   inventoryQty,
   NMG_MAX_SLOTS,
   NMG_TIERS,
+  GRADERS,
+  GRADER_IDS,
+  DEFAULT_GRADER,
+  getGrader,
+  graderValueMult,
+  rollSubgains,
+  SUBGAIN_KEYS,
+  SUBGAIN_LABELS,
+  isFirstEditionEligible,
+  doCrackSlab,
+  NMG_CRACK_COST,
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,

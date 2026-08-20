@@ -31,6 +31,20 @@ const {
   revealNmgSlot,
   deleteNmgSlot,
   fastForwardAllActiveNmgSlots,
+  getCertNosInActiveSlots,
+  mintCert,
+  getCertByNo,
+  getCertBySeries,
+  pickCertFifo,
+  getLivingCertsFor,
+  getLivingCertsForUser,
+  getAllLivingCerts,
+  getPopulationRows,
+  appendCertHistory,
+  setCertOwner,
+  retireCert,
+  updateCertOnRegrade,
+  getAllUserIdsAndCharacters,
   getServerState,
   setServerPaused,
   setServerModifier,
@@ -218,6 +232,14 @@ const {
   inventoryQty,
   NMG_MAX_SLOTS,
   NMG_TIERS,
+  GRADERS,
+  GRADER_IDS,
+  DEFAULT_GRADER,
+  getGrader,
+  rollSubgains,
+  isFirstEditionEligible,
+  doCrackSlab,
+  NMG_CRACK_COST,
   isCosmeticInventoryId,
   nmgBaseIdOf,
   rollNmgGrade,
@@ -1369,6 +1391,299 @@ app.post('/crates/redblue/spin', requireAuth, (req, res) => {
   res.json({ ok: true, character, remaining: crateKey === 'red' ? stock.red_crate_remaining : stock.blue_crate_remaining });
 });
 
+// ---------- Grading cert registry: hooks, reconcile, Pop Report, Cert Lookup ----------
+// Read the long fungibility-contract comment above the grading_certs table in db.js first -- it
+// explains why inventory stays fungible and what the FIFO pick does and does not guarantee.
+//
+// EVERY HOOK POINT, in one list, so a future path can be checked against it:
+//   mint    /nmg/reveal (fresh submission)      source 'graded'
+//   mint    /cosmetixx-market/buy               source 'market'   (at PURCHASE, see note there)
+//   mint    reconcileCerts()                    source 'legacy'   (backfill + drift repair)
+//   update  /nmg/reveal (regrade)               same cert_no, new graded_id/subgains, history event
+//   retire  /nmg/crack
+//   move    /mtn/buy                            seller -> buyer, with the sale price in history
+// There is no separate player-to-player trade route in this codebase -- MTN is the only path an
+// item moves between players -- so 'trade' exists in the event vocabulary but nothing emits it yet.
+// MTN list/cancel deliberately do NOT touch certs: a listed slab leaves character.inventory but is
+// still the seller's property in escrow, so its cert keeps the seller as owner and reconcileCerts()
+// counts active listings as held (below). A cancel is then a no-op rather than a re-mint.
+
+function certDisplayName(character) {
+  return `${character.firstName} ${character.lastName}`;
+}
+
+function certEvent(type, fields = {}) {
+  return { t: Date.now(), type, ...fields };
+}
+
+function mintCertForSlab({ userId, gradedId, source, event, subs, mintedAt = Date.now() }) {
+  const parsed = parseGradedId(gradedId);
+  if (!parsed) return null;
+  return mintCert({
+    grader: parsed.grader,
+    gradedId,
+    ownerUserId: userId,
+    mintedAt,
+    source,
+    firstEdition: isFirstEditionEligible(parsed.preGradeId),
+    subs: subs || null,
+    event: event || null,
+  });
+}
+
+// Moves ONE cert of `gradedId` from `fromUserId` to `toUserId`, FIFO. Returns the cert row moved,
+// or null if the seller had no living cert for it (possible only on pre-existing drift, which
+// reconcileCerts() repairs -- never a reason to fail the trade itself).
+function transferCertFifo(fromUserId, toUserId, gradedId, event) {
+  const cert = pickCertFifo(fromUserId, gradedId);
+  if (!cert) return null;
+  setCertOwner(cert.cert_no, toUserId);
+  if (event) appendCertHistory(cert.cert_no, event);
+  return cert;
+}
+
+function retireCertFifo(userId, gradedId, event) {
+  const cert = pickCertFifo(userId, gradedId);
+  if (!cert) return null;
+  if (event) appendCertHistory(cert.cert_no, event);
+  retireCert(cert.cert_no, Date.now());
+  return cert;
+}
+
+function certLabel(row) {
+  const grader = getGrader(row.grader);
+  return `${grader ? grader.short : row.grader.toUpperCase()} #${String(row.series_no).padStart(6, '0')}`;
+}
+
+function serializeCert(row) {
+  let history = [];
+  try {
+    const parsedHistory = JSON.parse(row.history);
+    if (Array.isArray(parsedHistory)) history = parsedHistory;
+  } catch {
+    // A corrupt history blob must never take down a lookup -- the cert's identity is the real
+    // payload here and the timeline is decoration.
+  }
+  const parsed = parseGradedId(row.graded_id) || {};
+  return {
+    certNo: row.cert_no,
+    grader: row.grader,
+    seriesNo: row.series_no,
+    label: certLabel(row),
+    gradedId: row.graded_id,
+    preGradeId: parsed.preGradeId || null,
+    grade: parsed.grade ?? null,
+    mintedAt: row.minted_at,
+    source: row.source,
+    firstEdition: !!row.first_edition,
+    // NULL subgains render as "--" client-side: CCG/NMG certs never have them by definition, and
+    // legacy NMG certs predate the registry entirely.
+    subgains: row.sub_gloss === null ? null : {
+      gloss: row.sub_gloss, stitch: row.sub_stitch, aura: row.sub_aura, drip: row.sub_drip,
+    },
+    blackLabel: !!row.black_label,
+    retiredAt: row.retired_at,
+    history,
+  };
+}
+
+// ---------- Reconcile / backfill ----------
+// One function does both jobs, because they are the same job: make the registry agree with what
+// players actually hold. Idempotent, so it is safe to run at boot (which it is -- see the call at
+// the bottom of this file) and safe to re-run by hand from the admin panel.
+//
+// A user's EFFECTIVE holdings of a graded id = inventory qty + their own active MTN listings of it.
+// Listings matter because doCreateListing() escrows the item out of character.inventory; without
+// counting them, a boot reconcile would retire the certs of every slab currently up for sale.
+// Certs pinned to an in-flight regrade slot are excluded from the comparison entirely for the same
+// reason (the slab is legitimately nowhere right now, and the cert is waiting for its reveal).
+function reconcileCerts({ dryRun = false } = {}) {
+  const now = Date.now();
+  const pinnedCertNos = new Set(getCertNosInActiveSlots());
+  const listings = getAllListings();
+  const result = { minted: 0, retired: 0, checkedUsers: 0, feMinted: 0 };
+
+  const listedByUser = new Map();
+  listings.forEach((l) => {
+    if (!isGradedTitleId(l.item_id)) return;
+    if (!listedByUser.has(l.seller_user_id)) listedByUser.set(l.seller_user_id, new Map());
+    const m = listedByUser.get(l.seller_user_id);
+    m.set(l.item_id, (m.get(l.item_id) || 0) + l.qty);
+  });
+
+  getAllUserIdsAndCharacters().forEach(({ id, character_json: json }) => {
+    let character;
+    try {
+      character = JSON.parse(json);
+    } catch {
+      return; // an unparseable character is a bigger problem than cert drift; skip, don't destroy.
+    }
+    result.checkedUsers += 1;
+
+    const held = new Map();
+    (character.inventory || []).forEach((stack) => {
+      if (!(stack.qty > 0) || !isGradedTitleId(stack.id)) return;
+      held.set(stack.id, (held.get(stack.id) || 0) + stack.qty);
+    });
+    (listedByUser.get(id) || new Map()).forEach((qty, itemId) => {
+      held.set(itemId, (held.get(itemId) || 0) + qty);
+    });
+
+    // Every graded id this user has EITHER a holding or a living cert for.
+    const gradedIds = new Set(held.keys());
+    getLivingCertsForUser(id).forEach((c) => gradedIds.add(c.graded_id));
+
+    gradedIds.forEach((gradedId) => {
+      const want = held.get(gradedId) || 0;
+      const certs = getLivingCertsFor(id, gradedId).filter((c) => !pinnedCertNos.has(c.cert_no));
+      if (certs.length < want) {
+        const missing = want - certs.length;
+        for (let i = 0; i < missing; i += 1) {
+          if (dryRun) { result.minted += 1; continue; }
+          const parsed = parseGradedId(gradedId);
+          if (!parsed) continue;
+          // BACKFILL RULE (owner-approved generosity): a legacy cert gets FIRST EDITION iff its
+          // crate is still active at migration time. Everything graded from an archived crate --
+          // Counterfinish, Anima, RED, BLUE, and the uncatalogued Open Beta / GOOD S1 -- misses out,
+          // which is the same test a freshly graded slab faces today.
+          const fe = isFirstEditionEligible(parsed.preGradeId);
+          // No subgains: nothing in the registry knows what a pre-registry MGA roll would have
+          // been, and inventing them would be fabricating provenance. Legacy MGA certs cannot exist
+          // anyway (MGA is new), so in practice every legacy cert is NMG.
+          mintCert({
+            grader: parsed.grader,
+            gradedId,
+            ownerUserId: id,
+            mintedAt: now,
+            source: 'legacy',
+            firstEdition: fe,
+            subs: null,
+            event: certEvent('graded', { by: certDisplayName(character), grade: parsed.grade, legacy: true }),
+          });
+          result.minted += 1;
+          if (fe) result.feMinted += 1;
+        }
+      } else if (certs.length > want) {
+        // Retire the NEWEST surplus certs, not the oldest -- FIFO gives away the oldest cert first
+        // everywhere else, so the low, desirable numbers are the ones a real holder keeps, and
+        // drift should not be able to take one away.
+        const surplus = certs.slice(want);
+        surplus.forEach((c) => {
+          if (dryRun) { result.retired += 1; return; }
+          appendCertHistory(c.cert_no, certEvent('cracked', { reconciled: true }));
+          retireCert(c.cert_no, now);
+          result.retired += 1;
+        });
+      }
+    });
+  });
+
+  // Certs whose owner no longer exists (deleted account) are retired -- they are not in anybody's
+  // inventory, so counting them in a population would be a lie.
+  const knownUserIds = new Set(getAllUserIdsAndCharacters().map((u) => u.id));
+  getAllLivingCerts().forEach((c) => {
+    if (c.owner_user_id !== null && !knownUserIds.has(c.owner_user_id)) {
+      if (dryRun) { result.retired += 1; return; }
+      retireCert(c.cert_no, now);
+      result.retired += 1;
+    }
+  });
+
+  return result;
+}
+
+// ---------- Pop Report ----------
+// Cached in-memory for 60s. The game has no rate limiting anywhere (see HANDOFF Open Items), and
+// this is the one route that aggregates the whole registry, so the cache is doing real work: it
+// bounds the query to once a minute no matter how many clients sit on the tab.
+const POP_REPORT_CACHE_MS = 60 * 1000;
+let popReportCache = { at: 0, payload: null };
+
+function buildPopReport() {
+  const rows = getPopulationRows();
+  const byGrader = {};
+  GRADER_IDS.forEach((g) => { byGrader[g] = { grader: g, short: GRADERS[g].short, name: GRADERS[g].name, total: 0, titles: {} }; });
+  rows.forEach((row) => {
+    const bucket = byGrader[row.grader];
+    if (!bucket) return; // an id from a grader that no longer exists -- ignore rather than crash.
+    const parsed = parseGradedId(row.graded_id);
+    if (!parsed) return;
+    if (!bucket.titles[parsed.preGradeId]) bucket.titles[parsed.preGradeId] = { preGradeId: parsed.preGradeId, total: 0, grades: [] };
+    const t = bucket.titles[parsed.preGradeId];
+    t.grades.push({ grade: parsed.grade, pop: row.pop, fePop: row.fe_pop, blPop: row.bl_pop });
+    t.total += row.pop;
+    bucket.total += row.pop;
+  });
+  // Grade descending within a title; the client does the crate grouping and rarity ordering, since
+  // the crate catalogs (and their rarity words) live client-side.
+  Object.values(byGrader).forEach((bucket) => {
+    bucket.titles = Object.values(bucket.titles).map((t) => ({
+      ...t,
+      grades: t.grades.sort((a, b) => b.grade - a.grade),
+    }));
+  });
+  return { graders: GRADER_IDS.map((g) => byGrader[g]), generatedAt: Date.now() };
+}
+
+app.get('/grading/pop-report', requireAuth, (req, res) => {
+  const now = Date.now();
+  if (!popReportCache.payload || now - popReportCache.at > POP_REPORT_CACHE_MS) {
+    popReportCache = { at: now, payload: buildPopReport() };
+  }
+  res.json({ ok: true, ...popReportCache.payload, cachedAt: popReportCache.at });
+});
+
+// Cert Lookup. Addressed by the DISPLAY series (grader + number), which is what is printed on the
+// slab and what a player will actually type in -- the global cert_no is an internal id.
+app.get('/grading/cert/:grader/:seriesNo', requireAuth, (req, res) => {
+  const grader = getGrader(req.params.grader);
+  const seriesNo = Number(req.params.seriesNo);
+  if (!grader || !Number.isInteger(seriesNo) || seriesNo < 1) {
+    return res.status(400).json({ ok: false, reason: 'Unknown cert number.' });
+  }
+  const row = getCertBySeries(grader.id, seriesNo);
+  if (!row) return res.status(404).json({ ok: false, reason: 'No such cert.' });
+
+  const cert = serializeCert(row);
+  // Owner name is denormalized at read time (not stored) so a rename shows the current name.
+  // A retired cert has no current owner -- the slab does not exist any more.
+  let ownerName = null;
+  if (!row.retired_at && row.owner_user_id) {
+    const owner = getUserById(row.owner_user_id);
+    if (owner) {
+      try {
+        ownerName = certDisplayName(JSON.parse(owner.character_json));
+      } catch {
+        ownerName = null;
+      }
+    }
+  }
+  res.json({ ok: true, cert: { ...cert, ownerName } });
+});
+
+// The caller's own certs, so the client can print a cert number on a slab it is rendering.
+app.get('/grading/my-certs', requireAuth, (req, res) => {
+  res.json({ ok: true, certs: getLivingCertsForUser(req.user.sub).map(serializeCert) });
+});
+
+// Grader catalog -- prices, pitches, which one rolls subgains. Mirrored client-side for display,
+// authoritative here for what is actually charged.
+app.get('/grading/graders', requireAuth, (req, res) => {
+  res.json({
+    ok: true,
+    graders: GRADER_IDS.map((id) => {
+      const g = GRADERS[id];
+      return {
+        id, name: g.name, short: g.short, pitch: g.pitch,
+        subgains: g.subgains, blackLabel: g.blackLabel,
+        tiers: Object.fromEntries(Object.entries(g.tiers).map(([t, d]) => [t, { cost: d.cost }])),
+        regradeFees: g.regradeFees,
+      };
+    }),
+    crackCost: NMG_CRACK_COST,
+  });
+});
+
 // New Milos Grading (NMG): submit/reveal can't reuse the generic runAction() helper -- both need
 // direct nmg_slots row work interleaved with the character mutation, same reason the RED/BLUE
 // crate routes above bypass it. Slot state deliberately lives in its own table, never inside
@@ -1384,6 +1699,8 @@ app.get('/nmg/state', requireAuth, (req, res) => {
       slotIndex: s.slot_index,
       titleId: s.title_id,
       tier: s.tier,
+      grader: s.grader || DEFAULT_GRADER,
+      isRegrade: s.cert_no !== null && s.cert_no !== undefined,
       submittedAt: s.submitted_at,
       readyAt: s.ready_at,
       ready: Date.now() >= s.ready_at,
@@ -1396,7 +1713,11 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
 
   const { stackId, tier } = req.body || {};
-  const tierDef = NMG_TIERS[tier];
+  // `grader` is new with the three-grader split. An older client that doesn't send one gets NMG,
+  // which is exactly what it used to get -- so no client/server version skew during a deploy.
+  const grader = getGrader((req.body || {}).grader || DEFAULT_GRADER);
+  if (!grader) return res.status(400).json({ ok: false, reason: 'Unknown grader.' });
+  const tierDef = grader.tiers[tier];
   if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
 
   const user = getUserById(req.user.sub);
@@ -1437,11 +1758,11 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   const isAdminTester = (req.user?.username || '').toLowerCase() === ADMIN_USERNAME;
   const durationMs = isAdminTester ? 5000 : tierDef.ms;
   const readyAt = now + durationMs;
-  const rowId = createNmgSlot(user.id, slotIndex, stackId, tier, tierDef.cost, now, readyAt);
+  const rowId = createNmgSlot(user.id, slotIndex, stackId, tier, tierDef.cost, now, readyAt, grader.id, null);
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgSubmit', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
-  res.json({ ok: true, character, slot: { id: rowId, slotIndex, titleId: stackId, tier, submittedAt: now, readyAt } });
+  res.json({ ok: true, character, slot: { id: rowId, slotIndex, titleId: stackId, tier, grader: grader.id, submittedAt: now, readyAt } });
 });
 
 // Regrade: resubmit an owned slab for a fresh roll. Structurally the same as /nmg/submit -- it
@@ -1454,13 +1775,19 @@ app.post('/nmg/regrade', requireAuth, (req, res) => {
   if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
 
   const { stackId, tier } = req.body || {};
-  const tierDef = NMG_TIERS[tier];
-  if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
-  const fee = nmgRegradeFee(tier);
-  if (fee === null) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
-
   const parsed = parseGradedId(stackId);
   if (!parsed) return res.status(400).json({ ok: false, reason: 'That is not a graded slab.' });
+
+  // A slab goes back to the grader that graded it -- the grader is read off the slab's own id, never
+  // taken from the request. An MGA slab regrades at MGA prices with fresh SUBGAINS; a CCG slab at
+  // CCG prices with none. Cross-grader "re-holdering" is deliberately not a thing: it would let a
+  // player launder a $2,000 CCG slab into an MGA one for the price of a regrade.
+  const grader = getGrader(parsed.grader);
+  if (!grader) return res.status(400).json({ ok: false, reason: 'Unknown grader on that slab.' });
+  const tierDef = grader.tiers[tier];
+  if (!tierDef) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
+  const fee = nmgRegradeFee(tier, grader.id);
+  if (fee === null) return res.status(400).json({ ok: false, reason: 'Unknown turnaround tier.' });
 
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
@@ -1485,15 +1812,21 @@ app.post('/nmg/regrade', requireAuth, (req, res) => {
   const isAdminTester = (req.user?.username || '').toLowerCase() === ADMIN_USERNAME;
   const durationMs = isAdminTester ? 5000 : tierDef.ms;
   const readyAt = now + durationMs;
-  const rowId = createNmgSlot(user.id, slotIndex, parsed.preGradeId, tier, fee, now, readyAt);
+  // CERT CONTINUITY: the cert SURVIVES a regrade with its number intact. Pick it FIFO now, before
+  // the slab leaves inventory, and pin it to the slot so /nmg/reveal updates that same row instead
+  // of minting a new one. A regrade is a chapter in the slab's story, not a death and a birth --
+  // which is what makes "NMG #000482, graded 6, regraded to 9 three weeks later" a story at all.
+  const cert = pickCertFifo(user.id, stackId);
+  const rowId = createNmgSlot(user.id, slotIndex, parsed.preGradeId, tier, fee, now, readyAt, grader.id, cert ? cert.cert_no : null);
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doNmgRegrade', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
   res.json({
     ok: true,
     character,
-    slot: { id: rowId, slotIndex, titleId: parsed.preGradeId, tier, submittedAt: now, readyAt },
+    slot: { id: rowId, slotIndex, titleId: parsed.preGradeId, tier, grader: grader.id, submittedAt: now, readyAt },
     previousGrade: parsed.grade,
+    grader: grader.id,
   });
 });
 
@@ -1518,9 +1851,41 @@ app.post('/nmg/reveal', requireAuth, (req, res) => {
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
   const character = JSON.parse(user.character_json);
 
+  const grader = getGrader(row.grader) || GRADERS[DEFAULT_GRADER];
   const grade = rollNmgGrade();
-  const gradedId = `${row.title_id}_nmg${grade}`;
+  // SUBGAINS are rolled here, at reveal, for BOTH fresh grades and regrades -- and only for a
+  // grader that has them (MGA). CCG/NMG get null and their certs carry NULL subgain columns.
+  const subs = rollSubgains(grader.id, grade);
+  const gradedId = `${row.title_id}${grader.suffix}${grade}`;
   addToInventory(character, gradedId, 1);
+
+  const name = certDisplayName(character);
+  let cert = null;
+  if (row.cert_no) {
+    // Regrade: same cert_no, new graded_id, fresh subgains, and the grade change appended.
+    const prev = getCertByNo(row.cert_no);
+    updateCertOnRegrade(row.cert_no, gradedId, subs);
+    appendCertHistory(row.cert_no, certEvent('regraded', {
+      by: name,
+      grade,
+      fromGrade: prev ? (parseGradedId(prev.graded_id) || {}).grade ?? null : null,
+      subs: subs ? { gloss: subs.gloss, stitch: subs.stitch, aura: subs.aura, drip: subs.drip } : null,
+    }));
+    cert = getCertByNo(row.cert_no);
+  } else {
+    const minted = mintCertForSlab({
+      userId: user.id,
+      gradedId,
+      source: 'graded',
+      subs,
+      event: certEvent('graded', {
+        by: name,
+        grade,
+        subs: subs ? { gloss: subs.gloss, stitch: subs.stitch, aura: subs.aura, drip: subs.drip } : null,
+      }),
+    });
+    cert = minted ? getCertByNo(minted.certNo) : null;
+  }
 
   revealNmgSlot(row.id, grade, Date.now());
   deleteNmgSlot(row.id);
@@ -1528,15 +1893,55 @@ app.post('/nmg/reveal', requireAuth, (req, res) => {
 
   try {
     // High-signal only -- every reveal (including low grades) would drown out the rest of the
-    // ticker, so only near-perfect slabs get a city-wide callout.
-    if (grade >= 8) {
-      recordCityEvent('nmg', `💎 ${character.firstName} ${character.lastName} pulled an NMG ${grade} on ${prettifyTitleId(row.title_id)}`);
+    // ticker, so only near-perfect slabs get a city-wide callout. A Black Label is loud regardless
+    // of anything else: it is the rarest outcome in the whole grading system.
+    if (subs && subs.blackLabel) {
+      recordCityEvent('nmg', `🖤 ${name} pulled a BLACK LABEL MGA 10 on ${prettifyTitleId(row.title_id)} -- all four SUBGAINS perfect`);
+    } else if (grade >= 8) {
+      recordCityEvent('nmg', `💎 ${name} pulled a ${grader.short} ${grade} on ${prettifyTitleId(row.title_id)}`);
     }
   } catch {
     // Ticker is best-effort flavor -- never let a logging failure break the reveal route.
   }
 
-  res.json({ ok: true, character, result: { baseTitleId: row.title_id, gradedId, grade } });
+  res.json({
+    ok: true,
+    character,
+    result: {
+      baseTitleId: row.title_id,
+      gradedId,
+      grade,
+      grader: grader.id,
+      subgains: subs ? { gloss: subs.gloss, stitch: subs.stitch, aura: subs.aura, drip: subs.drip } : null,
+      blackLabel: !!(subs && subs.blackLabel),
+      cert: cert ? serializeCert(cert) : null,
+    },
+  });
+});
+
+// Crack a Slab. Moved server-side by the cert registry: a crack RETIRES a cert, and a retirement
+// the server never hears about is a permanent, silent Pop Report lie. The old client-side version
+// (js/nmg.js crackNmgTitle) now just calls this.
+app.post('/nmg/crack', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { stackId } = req.body || {};
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  const cashBefore = character.cash;
+  const result = doCrackSlab(character, stackId);
+  if (!result.ok) return res.status(400).json(result);
+
+  // Retire the cert BEFORE saving, and pick it FIFO from the pre-crack holding.
+  const cert = retireCertFifo(user.id, result.crackedId, certEvent('cracked', { by: certDisplayName(character) }));
+
+  logTransaction(user.id, certDisplayName(character), 'doNmgCrack', round2(character.cash - cashBefore), character.cash);
+  saveCharacter(user.id, character);
+  res.json({ ...result, cert: cert ? certLabel(cert) : null });
 });
 
 // ---------- CosmetixxMarket ----------
@@ -1581,8 +1986,25 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
 
   const cashBefore = character.cash;
   character.cash = round2(character.cash - row.price);
-  const gradedId = `${row.title_id}_nmg${row.grade}`;
+  // CosmetixxMarket mints NMG slabs and only NMG slabs, deliberately: the store is the SYSTEM
+  // buying grading, and the system uses the everyman grader. MGA is a player prestige path you opt
+  // into and pay triple for, and CCG is a player budget choice -- neither is something the game
+  // should hand out on rotation.
+  const gradedId = `${row.title_id}${GRADERS.nmg.suffix}${row.grade}`;
   addToInventory(character, gradedId, 1);
+
+  // CERT MINTED AT PURCHASE, not at rotation generation. A rotation slab that nobody buys never
+  // existed as a physical object -- minting at generation would inflate every population by up to
+  // 5 phantom slabs a day, and those phantoms would be unownable and uncrackable forever. Certs are
+  // a registry of things that EXIST, so the object comes into being when someone pays for it.
+  const buyerName = certDisplayName(character);
+  mintCertForSlab({
+    userId: user.id,
+    gradedId,
+    source: 'market',
+    subs: null,
+    event: certEvent('market_buy', { to: buyerName, price: row.price, grade: row.grade }),
+  });
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'cosmetixxMarket/buy', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
@@ -1960,6 +2382,18 @@ app.post('/mtn/buy', requireAuth, (req, res) => {
     saveCharacter(buyerUser.id, buyerCharacter);
     if (sellerUser) {
       const sellerCharacter = JSON.parse(sellerUser.character_json);
+      // Cert transfer: one cert per unit sold, FIFO from the seller's living certs. The sale PRICE
+      // goes into the provenance event -- public flavor, consistent with the city ticker precedent
+      // that already broadcasts CosmetixxMarket purchase prices.
+      if (isGradedTitleId(listing.item_id)) {
+        const buyerName = `${buyerCharacter.firstName} ${buyerCharacter.lastName}`;
+        const sellerName = `${sellerCharacter.firstName} ${sellerCharacter.lastName}`;
+        for (let i = 0; i < listing.qty; i += 1) {
+          transferCertFifo(sellerUser.id, buyerUser.id, listing.item_id, certEvent('mtn_sale', {
+            from: sellerName, to: buyerName, price: round2(listing.price_per_unit),
+          }));
+        }
+      }
       creditSellerForSale(sellerCharacter, listing.item_id, listing.qty, total, `${buyerCharacter.firstName} ${buyerCharacter.lastName}`);
       logTransaction(sellerUser.id, `${sellerCharacter.firstName} ${sellerCharacter.lastName}`, 'mtn/sell', total, sellerCharacter.cash);
       saveCharacter(sellerUser.id, sellerCharacter);
@@ -2458,6 +2892,17 @@ app.post('/admin/nmg-fast-forward-all', requireAuth, requireAdminPassword, (req,
 // timer expires) and never retroactive -- a rotation already live when a pricing change deploys
 // keeps its old prices until it naturally rotates. This forces an immediate regeneration with
 // current pricing/catalog logic instead of waiting out the rest of the 24h window.
+// Rebuild the cert registry from an inventory scan: mints 'legacy' certs for anything holding a
+// slab with no cert, retires certs nobody holds. Same function that runs at boot -- this is the
+// manual trigger for when a bug is suspected. `dryRun` reports what it WOULD do and changes nothing.
+app.post('/admin/grading-reconcile', requireAuth, requireAdminPassword, (req, res) => {
+  const dryRun = !!(req.body || {}).dryRun;
+  const result = reconcileCerts({ dryRun });
+  // Only a real run moves counts -- a dry run must not evict a perfectly good cached report.
+  if (!dryRun) popReportCache = { at: 0, payload: null };
+  res.json({ ok: true, dryRun, ...result });
+});
+
 app.post('/admin/cosmetixx-market-regen', requireAuth, requireAdminPassword, (req, res) => {
   const now = Date.now();
   tryClaimCosmetixxMarketRegen(now, now + 1); // +1 guarantees the claim succeeds regardless of current timestamp
@@ -2840,6 +3285,29 @@ function pruneStockHistory() {
 }
 pruneStockHistory();
 setInterval(pruneStockHistory, TRANSACTION_PRUNE_INTERVAL_MS);
+
+// Cert registry backfill / drift repair.
+//
+// DECISION: this runs automatically at boot rather than being an admin route you remember to
+// trigger once. Reconcile is idempotent by construction (it compares certs against holdings and
+// only closes the gap), so a no-op boot costs one scan of ~15 characters; and running it every boot
+// means the registry self-heals if some future code path moves a graded id without a cert hook,
+// instead of silently drifting until someone notices a wrong population. The admin route
+// (/admin/grading-reconcile) still exists for an on-demand run and for a dry-run report.
+//
+// The very first boot after deploy IS the backfill: every existing slab in every inventory has no
+// cert yet, so all of them mint as source 'legacy'.
+try {
+  const reconciled = reconcileCerts();
+  console.log(
+    `Grading cert reconcile: ${reconciled.minted} minted (${reconciled.feMinted} First Edition), `
+    + `${reconciled.retired} retired, across ${reconciled.checkedUsers} character(s).`
+  );
+} catch (err) {
+  // A reconcile failure must never stop the server from booting -- the game works fine with a
+  // stale registry, and a crash loop here would take the whole game down over a cosmetics feature.
+  console.error('Grading cert reconcile failed at boot:', err);
+}
 
 app.listen(PORT, () => {
   console.log(`mfmmoalpha-server listening on port ${PORT}`);

@@ -310,6 +310,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_nmg_slots_user ON nmg_slots (user_id);
 `);
 
+// Added by the three-grader split. Same additive-column migration idiom as users.last_seen above.
+//   grader   -- which of CCG/NMG/MGA this submission was sent to. Existing in-flight rows predate
+//               the split and are NMG by definition, hence the DEFAULT.
+//   cert_no  -- set only on a REGRADE, holding the cert the resubmitted slab belongs to so
+//               /nmg/reveal can update that same cert instead of minting a new one. NULL for a
+//               fresh submission. This is also what keeps reconcileCerts() from retiring the cert
+//               of a slab that is legitimately mid-regrade and therefore out of inventory.
+const nmgSlotCols = db.prepare('PRAGMA table_info(nmg_slots)').all().map((c) => c.name);
+if (!nmgSlotCols.includes('grader')) {
+  db.exec("ALTER TABLE nmg_slots ADD COLUMN grader TEXT NOT NULL DEFAULT 'nmg'");
+}
+if (!nmgSlotCols.includes('cert_no')) {
+  db.exec('ALTER TABLE nmg_slots ADD COLUMN cert_no INTEGER');
+}
+
 function getActiveNmgSlots(userId) {
   return db.prepare('SELECT * FROM nmg_slots WHERE user_id = ? AND grade IS NULL ORDER BY slot_index ASC').all(userId);
 }
@@ -318,12 +333,19 @@ function getNmgSlotById(id) {
   return db.prepare('SELECT * FROM nmg_slots WHERE id = ?').get(id);
 }
 
-function createNmgSlot(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt) {
+function createNmgSlot(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt, grader = 'nmg', certNo = null) {
   const stmt = db.prepare(
-    'INSERT INTO nmg_slots (user_id, slot_index, title_id, tier, cost, submitted_at, ready_at, grade, revealed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)'
+    'INSERT INTO nmg_slots (user_id, slot_index, title_id, tier, cost, submitted_at, ready_at, grade, revealed_at, grader, cert_no) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)'
   );
-  const info = stmt.run(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt);
+  const info = stmt.run(userId, slotIndex, titleId, tier, cost, submittedAt, readyAt, grader, certNo);
   return info.lastInsertRowid;
+}
+
+// Cert numbers pinned to a still-pending regrade. reconcileCerts() must treat these as legitimately
+// absent from inventory rather than as drift to be retired.
+function getCertNosInActiveSlots() {
+  return db.prepare('SELECT cert_no FROM nmg_slots WHERE grade IS NULL AND cert_no IS NOT NULL')
+    .all().map((r) => r.cert_no);
 }
 
 function revealNmgSlot(id, grade, revealedAt) {
@@ -343,6 +365,200 @@ function deleteNmgSlot(id) {
 // -- still rolled at reveal time, same as any other slot.
 function fastForwardAllActiveNmgSlots(now) {
   return db.prepare('UPDATE nmg_slots SET ready_at = MIN(ready_at, ?) WHERE grade IS NULL').run(now).changes;
+}
+
+// ---------- Grading cert registry ----------
+// One row per PHYSICAL SLAB that has ever existed, across all three graders (CCG/NMG/MGA). This is
+// the foundation of the Pop Report, Cert Lookup, First Edition, SUBGAINS and provenance.
+//
+// THE FUNGIBILITY CONTRACT -- read this before touching any cert code.
+//
+// Inventory stacks are FUNGIBLE and stay that way: two `cfRuby_nmg7` are one stack with qty 2. That
+// is deliberate and was NOT changed. Reshaping graded ids to be per-instance unique would mean
+// rewriting the `_nmgN` id parsing that is load-bearing in six-plus places on both sides of the
+// client/server mirror (getItemDef, showcases, MTN, valuation, regrade, crack), for a live game
+// with real inventories -- an enormous regression surface for a registry that does not need it.
+//
+// So certs are a PARALLEL registry, not an inventory change:
+//   * Every minted slab creates a cert row.
+//   * When a slab changes hands (MTN sale, CosmetixxMarket buy) or is destroyed (crack, regrade
+//     burn), we pick the matching cert by (owner_user_id, graded_id) FIFO -- lowest cert_no first --
+//     and transfer / retire / update THAT row.
+//
+// When you own qty > 1 of the same graded id, WHICH physical cert moves is a fiction: the inventory
+// stack genuinely does not distinguish them. FIFO makes that fiction DETERMINISTIC (same input,
+// same cert every time -- never random, never "whichever the query returned"), and, critically,
+// POPULATION COUNTS STAY EXACTLY CORRECT regardless: n copies owned <-> n living certs, whichever
+// one of them is nominally "the" one you just sold. The only thing the fiction can get wrong is
+// which cert NUMBER a given player ends up holding when they had duplicates -- never how many of
+// something exists, which is the number the Pop Report actually reports.
+//
+// Cert-vs-inventory drift is still possible if a future code path moves a graded id without calling
+// a hook, so reconcileCerts() (server.js) rebuilds from an inventory scan and runs idempotently at
+// boot; it is also the backfill.
+//
+// Numbering: cert_no is the global internal id. series_no is the DISPLAY number and is per-grader
+// (NMG #000482 and MGA #000017 are independent series, like real graders' cert series).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS grading_certs (
+    cert_no INTEGER PRIMARY KEY AUTOINCREMENT,
+    grader TEXT NOT NULL,
+    series_no INTEGER NOT NULL,
+    graded_id TEXT NOT NULL,
+    owner_user_id INTEGER,
+    minted_at INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    first_edition INTEGER NOT NULL DEFAULT 0,
+    sub_gloss INTEGER,
+    sub_stitch INTEGER,
+    sub_aura INTEGER,
+    sub_drip INTEGER,
+    black_label INTEGER NOT NULL DEFAULT 0,
+    retired_at INTEGER,
+    history TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE INDEX IF NOT EXISTS idx_grading_certs_owner ON grading_certs (owner_user_id, graded_id, retired_at);
+  CREATE INDEX IF NOT EXISTS idx_grading_certs_pop ON grading_certs (retired_at, graded_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_grading_certs_series ON grading_certs (grader, series_no);
+`);
+
+// Per-grader display counter. better-sqlite3 is synchronous and single-threaded, and every mint
+// runs inside a transaction, so read-max-then-insert cannot interleave; the UNIQUE index above is
+// the belt-and-braces proof if that ever stops being true.
+function nextCertSeriesNo(grader) {
+  const row = db.prepare('SELECT MAX(series_no) AS m FROM grading_certs WHERE grader = ?').get(grader);
+  return (row && row.m ? row.m : 0) + 1;
+}
+
+const insertCertStmt = db.prepare(`
+  INSERT INTO grading_certs
+    (grader, series_no, graded_id, owner_user_id, minted_at, source, first_edition,
+     sub_gloss, sub_stitch, sub_aura, sub_drip, black_label, retired_at, history)
+  VALUES (@grader, @series_no, @graded_id, @owner_user_id, @minted_at, @source, @first_edition,
+     @sub_gloss, @sub_stitch, @sub_aura, @sub_drip, @black_label, NULL, @history)
+`);
+
+// `subs` is the rollSubgains() result (or null for a grader that doesn't roll them).
+// `event` is the first provenance entry; pass null to start with an empty timeline.
+const mintCert = db.transaction((fields) => {
+  const seriesNo = nextCertSeriesNo(fields.grader);
+  const info = insertCertStmt.run({
+    grader: fields.grader,
+    series_no: seriesNo,
+    graded_id: fields.gradedId,
+    owner_user_id: fields.ownerUserId ?? null,
+    minted_at: fields.mintedAt,
+    source: fields.source,
+    first_edition: fields.firstEdition ? 1 : 0,
+    sub_gloss: fields.subs ? fields.subs.gloss : null,
+    sub_stitch: fields.subs ? fields.subs.stitch : null,
+    sub_aura: fields.subs ? fields.subs.aura : null,
+    sub_drip: fields.subs ? fields.subs.drip : null,
+    black_label: fields.subs && fields.subs.blackLabel ? 1 : 0,
+    history: JSON.stringify(fields.event ? [fields.event] : []),
+  });
+  return { certNo: info.lastInsertRowid, seriesNo };
+});
+
+function getCertByNo(certNo) {
+  return db.prepare('SELECT * FROM grading_certs WHERE cert_no = ?').get(certNo);
+}
+
+function getCertBySeries(grader, seriesNo) {
+  return db.prepare('SELECT * FROM grading_certs WHERE grader = ? AND series_no = ?').get(grader, seriesNo);
+}
+
+// THE FIFO PICK -- the single place the fungibility contract above is implemented. Every
+// transfer/retire/regrade hook resolves its cert through this, so the tie-break rule exists once.
+function pickCertFifo(ownerUserId, gradedId) {
+  return db.prepare(
+    'SELECT * FROM grading_certs WHERE owner_user_id = ? AND graded_id = ? AND retired_at IS NULL ORDER BY cert_no ASC LIMIT 1'
+  ).get(ownerUserId, gradedId);
+}
+
+// Living certs a user holds of one graded id, oldest first.
+function getLivingCertsFor(ownerUserId, gradedId) {
+  return db.prepare(
+    'SELECT * FROM grading_certs WHERE owner_user_id = ? AND graded_id = ? AND retired_at IS NULL ORDER BY cert_no ASC'
+  ).all(ownerUserId, gradedId);
+}
+
+function getLivingCertsForUser(ownerUserId) {
+  return db.prepare(
+    'SELECT * FROM grading_certs WHERE owner_user_id = ? AND retired_at IS NULL ORDER BY cert_no ASC'
+  ).all(ownerUserId);
+}
+
+function getAllLivingCerts() {
+  return db.prepare('SELECT * FROM grading_certs WHERE retired_at IS NULL').all();
+}
+
+// Population counts for the Pop Report: one row per (grader, graded_id) with at least one living
+// cert. Aggregated in SQL rather than in JS so the query stays cheap as the registry grows.
+function getPopulationRows() {
+  return db.prepare(`
+    SELECT grader, graded_id, COUNT(*) AS pop,
+           SUM(CASE WHEN first_edition = 1 THEN 1 ELSE 0 END) AS fe_pop,
+           SUM(CASE WHEN black_label = 1 THEN 1 ELSE 0 END) AS bl_pop
+    FROM grading_certs
+    WHERE retired_at IS NULL
+    GROUP BY grader, graded_id
+  `).all();
+}
+
+// History is capped so a heavily traded slab's row can't grow without bound. The OLDEST events are
+// dropped past the cap, except the very first one (the mint) which is always kept -- "graded by X on
+// date Y" is the single most interesting line in a provenance timeline and losing it would be worse
+// than losing any ten trades in the middle.
+const CERT_HISTORY_MAX = 50;
+
+function appendCertHistory(certNo, event) {
+  const row = getCertByNo(certNo);
+  if (!row) return;
+  let events;
+  try {
+    events = JSON.parse(row.history);
+    if (!Array.isArray(events)) events = [];
+  } catch {
+    events = [];
+  }
+  events.push(event);
+  if (events.length > CERT_HISTORY_MAX) {
+    const first = events[0];
+    events = [first, ...events.slice(events.length - (CERT_HISTORY_MAX - 1))];
+  }
+  db.prepare('UPDATE grading_certs SET history = ? WHERE cert_no = ?').run(JSON.stringify(events), certNo);
+}
+
+function setCertOwner(certNo, ownerUserId) {
+  db.prepare('UPDATE grading_certs SET owner_user_id = ? WHERE cert_no = ?').run(ownerUserId, certNo);
+}
+
+function retireCert(certNo, retiredAt) {
+  db.prepare('UPDATE grading_certs SET retired_at = ? WHERE cert_no = ? AND retired_at IS NULL').run(retiredAt, certNo);
+}
+
+// Regrade: the cert SURVIVES with its number intact -- cert continuity is the point, a regrade is a
+// chapter in the slab's story rather than the death of one slab and the birth of another. Only the
+// graded_id, the subgains and the black-label flag are rewritten.
+function updateCertOnRegrade(certNo, gradedId, subs) {
+  db.prepare(`
+    UPDATE grading_certs
+       SET graded_id = ?, sub_gloss = ?, sub_stitch = ?, sub_aura = ?, sub_drip = ?, black_label = ?
+     WHERE cert_no = ?
+  `).run(
+    gradedId,
+    subs ? subs.gloss : null,
+    subs ? subs.stitch : null,
+    subs ? subs.aura : null,
+    subs ? subs.drip : null,
+    subs && subs.blackLabel ? 1 : 0,
+    certNo
+  );
+}
+
+function getAllUserIdsAndCharacters() {
+  return db.prepare('SELECT id, character_json FROM users').all();
 }
 
 // New Milos City chat: a shared table (unlike character_json) since every message needs to be
@@ -1194,6 +1410,21 @@ module.exports = {
   revealNmgSlot,
   deleteNmgSlot,
   fastForwardAllActiveNmgSlots,
+  getCertNosInActiveSlots,
+  mintCert,
+  getCertByNo,
+  getCertBySeries,
+  pickCertFifo,
+  getLivingCertsFor,
+  getLivingCertsForUser,
+  getAllLivingCerts,
+  getPopulationRows,
+  appendCertHistory,
+  setCertOwner,
+  retireCert,
+  updateCertOnRegrade,
+  getAllUserIdsAndCharacters,
+  CERT_HISTORY_MAX,
   getServerState,
   setServerPaused,
   setServerModifier,
