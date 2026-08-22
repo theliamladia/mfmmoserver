@@ -4734,6 +4734,7 @@ module.exports = {
   rollSubgains,
   SUBGAIN_KEYS,
   SUBGAIN_LABELS,
+  SUBGAIN_SPREAD,
   isFirstEditionEligible,
   doCrackSlab,
   NMG_CRACK_COST,
