@@ -239,6 +239,8 @@ const {
   DEFAULT_GRADER,
   getGrader,
   rollSubgains,
+  SUBGAIN_KEYS,
+  SUBGAIN_SPREAD,
   isFirstEditionEligible,
   doCrackSlab,
   NMG_CRACK_COST,
@@ -3046,6 +3048,95 @@ app.post('/admin/grant-cash', requireAuth, requireAdminPassword, (req, res) => {
   saveCharacter(user.id, character);
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'admin/grant-cash', targetAmount, character.cash);
   res.json({ ok: true, message: `Gave $${targetAmount.toLocaleString()} to ${user.username}.` });
+});
+
+// Mints a graded slab AND the cert that goes with it, in one shot. /admin/grant-item cannot do
+// this job: it only pushes an id into inventory, and SUBGAINS and BLACK LABEL live on the CERT, not
+// on the id (see the hook list above the registry section) -- so a slab handed out that way renders
+// with "--" subgains, no cert number and no black case until reconcileCerts() backfills it a
+// subgain-less `legacy` cert. Certs minted here carry source 'admin', a source of its own, so the
+// registry stays honest about which slabs were granted rather than rolled.
+//
+// `subgains` is null to roll them (and is ignored by a grader that has none), or
+// { gloss, stitch, aura, drip } to set them exactly. Hand-set values are held to the same +/-2
+// window a rolled subgain lives in, and blackLabel is DERIVED here by the same rule rollSubgains()
+// uses -- never read off the request -- so no body can forge a Black Label onto a grade or a grader
+// that could not carry one.
+app.post('/admin/grant-slab', requireAuth, requireAdminPassword, (req, res) => {
+  const { username, baseId, grader: graderId, grade, subgains } = req.body || {};
+  const targetUsername = (username || '').trim();
+  const targetBaseId = (baseId || '').trim();
+  const targetGrade = Math.floor(+grade);
+  const grader = getGrader(graderId);
+
+  if (!targetUsername || !targetBaseId) {
+    return res.status(400).json({ ok: false, reason: 'Enter a username and a base title id.' });
+  }
+  if (!grader) return res.status(400).json({ ok: false, reason: `Unknown grader "${graderId}".` });
+  if (!(targetGrade >= 1 && targetGrade <= 10)) {
+    return res.status(400).json({ ok: false, reason: 'Grade must be 1-10.' });
+  }
+  // A base id that is itself a slab would mint `x_mga10_mga10` -- a shape no other route can
+  // produce and nothing downstream can parse back to a real title.
+  if (isGradedTitleId(targetBaseId)) {
+    return res.status(400).json({ ok: false, reason: 'Base id is already a graded slab.' });
+  }
+
+  const gradedId = `${targetBaseId}${grader.suffix}${targetGrade}`;
+  if (!parseGradedId(gradedId)) {
+    return res.status(400).json({ ok: false, reason: `"${gradedId}" is not a valid graded id.` });
+  }
+
+  let subs = null;
+  if (grader.subgains) {
+    if (subgains === null || subgains === undefined) {
+      subs = rollSubgains(grader.id, targetGrade);
+    } else {
+      const min = Math.max(1, targetGrade - SUBGAIN_SPREAD);
+      const max = Math.min(10, targetGrade + SUBGAIN_SPREAD);
+      subs = {};
+      for (const key of SUBGAIN_KEYS) {
+        const value = Math.floor(+subgains[key]);
+        if (!(value >= min && value <= max)) {
+          return res.status(400).json({ ok: false, reason: `${key} must be ${min}-${max} on a ${grader.short} ${targetGrade}.` });
+        }
+        subs[key] = value;
+      }
+      subs.blackLabel = !!grader.blackLabel && targetGrade === 10 && SUBGAIN_KEYS.every((k) => subs[k] === 10);
+    }
+  }
+
+  const user = getUserByUsername(targetUsername);
+  if (!user) return res.status(404).json({ ok: false, reason: `No player named "${targetUsername}" found.` });
+
+  const character = JSON.parse(user.character_json);
+  addToInventory(character, gradedId, 1);
+  saveCharacter(user.id, character);
+
+  const minted = mintCertForSlab({
+    userId: user.id,
+    gradedId,
+    source: 'admin',
+    subs,
+    event: certEvent('graded', {
+      by: certDisplayName(character),
+      grade: targetGrade,
+      admin: true,
+      subs: subs ? { gloss: subs.gloss, stitch: subs.stitch, aura: subs.aura, drip: subs.drip } : null,
+    }),
+  });
+  const cert = minted ? getCertByNo(minted.certNo) : null;
+
+  // The Pop Report counts living certs, so a fresh mint invalidates its cache -- same as reconcile.
+  popReportCache = { at: 0, payload: null };
+
+  res.json({
+    ok: true,
+    gradedId,
+    cert: cert ? serializeCert(cert) : null,
+    message: `Gave ${user.username} a ${grader.short} ${targetGrade} ${targetBaseId}`
+      + `${subs && subs.blackLabel ? ' -- BLACK LABEL' : ''}${cert ? ` (${certLabel(cert)})` : ''}.`,
+  });
 });
 
 // Clears the NMG grading backlog across every player at once -- marks every still-pending slot
