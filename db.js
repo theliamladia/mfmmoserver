@@ -460,6 +460,18 @@ const mintCert = db.transaction((fields) => {
   return { certNo: info.lastInsertRowid, seriesNo };
 });
 
+// One-time-per-boot cleanup of the ghosts this feature left behind before slabs destroyed their own
+// certs on sale: reconcileCerts() used to RETIRE a cert whose holder no longer held the slab, which
+// for a sold slab is the wrong verb -- the slab is gone, not cracked, and its cert should not be
+// looked-up-able at all. Those rows are identifiable exactly: only reconcile's own retirement writes
+// a `reconciled` flag into the history event. Cracks (a real, recorded retirement) never match.
+function purgeReconciledRetiredCerts() {
+  const info = db.prepare(
+    "DELETE FROM grading_certs WHERE retired_at IS NOT NULL AND history LIKE '%\"reconciled\":true%'"
+  ).run();
+  return info.changes;
+}
+
 function getCertByNo(certNo) {
   return db.prepare('SELECT * FROM grading_certs WHERE cert_no = ?').get(certNo);
 }
@@ -536,6 +548,15 @@ function setCertOwner(certNo, ownerUserId) {
 
 function retireCert(certNo, retiredAt) {
   db.prepare('UPDATE grading_certs SET retired_at = ? WHERE cert_no = ? AND retired_at IS NULL').run(retiredAt, certNo);
+}
+
+// A SOLD slab leaves the world entirely -- the item is gone for cash and nobody holds it any more,
+// so its cert is DELETED rather than retired. That is the difference between this and retireCert():
+// a crack is a chapter in a slab's story worth keeping (the number stays looked-up-able, marked
+// retired), while a sale is the slab ceasing to exist. A deleted cert vacates its series number,
+// which is never reissued -- nextCertSeriesNo() reads MAX(series_no), so the gap simply stays a gap.
+function deleteCert(certNo) {
+  db.prepare('DELETE FROM grading_certs WHERE cert_no = ?').run(certNo);
 }
 
 // Regrade: the cert SURVIVES with its number intact -- cert continuity is the point, a regrade is a
@@ -1448,6 +1469,8 @@ module.exports = {
   appendCertHistory,
   setCertOwner,
   retireCert,
+  deleteCert,
+  purgeReconciledRetiredCerts,
   updateCertOnRegrade,
   getAllUserIdsAndCharacters,
   getRegistryCompletion,
