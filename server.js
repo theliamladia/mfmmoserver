@@ -43,6 +43,8 @@ const {
   appendCertHistory,
   setCertOwner,
   retireCert,
+  deleteCert,
+  purgeReconciledRetiredCerts,
   updateCertOnRegrade,
   getAllUserIdsAndCharacters,
   getRegistryCompletion,
@@ -1460,6 +1462,15 @@ function retireCertFifo(userId, gradedId, event) {
   return cert;
 }
 
+// A SALE, unlike a crack, ends the slab: the cert is deleted outright rather than retired. FIFO for
+// the same reason every other transfer/retire hook is -- see pickCertFifo in db.js.
+function destroyCertFifo(userId, gradedId) {
+  const cert = pickCertFifo(userId, gradedId);
+  if (!cert) return null;
+  deleteCert(cert.cert_no);
+  return cert;
+}
+
 function certLabel(row) {
   const grader = getGrader(row.grader);
   return `${grader ? grader.short : row.grader.toUpperCase()} #${String(row.series_no).padStart(6, '0')}`;
@@ -1511,7 +1522,7 @@ function reconcileCerts({ dryRun = false } = {}) {
   const now = Date.now();
   const pinnedCertNos = new Set(getCertNosInActiveSlots());
   const listings = getAllListings();
-  const result = { minted: 0, retired: 0, checkedUsers: 0, feMinted: 0 };
+  const result = { minted: 0, retired: 0, deleted: 0, purged: 0, checkedUsers: 0, feMinted: 0 };
 
   const listedByUser = new Map();
   listings.forEach((l) => {
@@ -1574,15 +1585,18 @@ function reconcileCerts({ dryRun = false } = {}) {
           if (fe) result.feMinted += 1;
         }
       } else if (certs.length > want) {
+        // Surplus means the holder no longer holds the slab and no crack/sale route retired or
+        // deleted its cert -- in practice a slab sold for cash (the sidebar Sell) before or without
+        // /grading/cert/destroy reaching the server. That slab is GONE, not cracked, so the cert is
+        // deleted rather than retired: a sold slab should not linger as a looked-up-able number.
         // Retire the NEWEST surplus certs, not the oldest -- FIFO gives away the oldest cert first
         // everywhere else, so the low, desirable numbers are the ones a real holder keeps, and
         // drift should not be able to take one away.
         const surplus = certs.slice(want);
         surplus.forEach((c) => {
-          if (dryRun) { result.retired += 1; return; }
-          appendCertHistory(c.cert_no, certEvent('cracked', { reconciled: true }));
-          retireCert(c.cert_no, now);
-          result.retired += 1;
+          if (dryRun) { result.deleted += 1; return; }
+          deleteCert(c.cert_no);
+          result.deleted += 1;
         });
       }
     });
@@ -1598,6 +1612,11 @@ function reconcileCerts({ dryRun = false } = {}) {
       result.retired += 1;
     }
   });
+
+  // Sweep the ghosts left by the OLD drift behaviour (retire-on-missing), which for a sold slab
+  // recorded a retirement that should never have existed. Idempotent: after the first run there is
+  // nothing left matching, and nothing new can match, since drift now deletes.
+  if (!dryRun) result.purged = purgeReconciledRetiredCerts();
 
   return result;
 }
@@ -2112,6 +2131,27 @@ app.post('/nmg/crack', requireAuth, (req, res) => {
   logTransaction(user.id, certDisplayName(character), 'doNmgCrack', round2(character.cash - cashBefore), character.cash);
   saveCharacter(user.id, character);
   res.json({ ...result, cert: cert ? certLabel(cert) : null });
+});
+
+// Selling a slab for cash (the Sell button in the Graded Titles sidebar -- NOT an MTN listing or a
+// profile stall sale, which are transfers between players and keep the cert alive under its new
+// owner) destroys the slab. This deletes the cert that went with it, so the registry stops counting
+// a slab nobody holds: the Pop Report drops it, and the number stops resolving in Cert Lookup.
+//
+// The cash and the inventory removal stay client-side, exactly as they are for every other title
+// sale (titles are trust-based here -- see sellTitle in mfmmoalpha/js/inventory.js). Only the
+// REGISTRY half is server-authoritative, which is the half that has to be: a player cannot mint,
+// keep alive or forge a cert from the client, and reconcileCerts() deletes any cert whose slab
+// stopped existing without this call ever arriving.
+app.post('/grading/cert/destroy', requireAuth, (req, res) => {
+  const gradedId = ((req.body || {}).gradedId || '').trim();
+  if (!isGradedTitleId(gradedId)) return res.status(400).json({ ok: false, reason: 'Not a graded slab.' });
+
+  const cert = destroyCertFifo(req.user.sub, gradedId);
+  // No living cert is not an error: a slab can predate the registry, or its cert may already have
+  // been swept by a reconcile. The sale still went through client-side either way.
+  if (cert) popReportCache = { at: 0, payload: null };
+  res.json({ ok: true, cert: cert ? certLabel(cert) : null });
 });
 
 // ---------- CosmetixxMarket ----------
@@ -3560,7 +3600,8 @@ try {
   const reconciled = reconcileCerts();
   console.log(
     `Grading cert reconcile: ${reconciled.minted} minted (${reconciled.feMinted} First Edition), `
-    + `${reconciled.retired} retired, across ${reconciled.checkedUsers} character(s).`
+    + `${reconciled.retired} retired, ${reconciled.deleted} deleted, ${reconciled.purged} purged, `
+    + `across ${reconciled.checkedUsers} character(s).`
   );
 } catch (err) {
   // A reconcile failure must never stop the server from booting -- the game works fine with a
