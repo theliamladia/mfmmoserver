@@ -2157,6 +2157,18 @@ app.post('/grading/cert/destroy', requireAuth, (req, res) => {
 // ---------- CosmetixxMarket ----------
 // Lazy 24h regen, same "check-and-claim on the next relevant request, no cron job" idiom used
 // everywhere else server-side (pause/maintenance checks, the Milos heartbeat, etc).
+// A slot's subgains live as a JSON blob on the row. A corrupt blob must never take down the store,
+// so it degrades to "no subgains" -- the slab then reads as a CCG/NMG one would.
+function parseSlotSubgains(row) {
+  if (!row.subgains) return null;
+  try {
+    const parsed = JSON.parse(row.subgains);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 app.get('/cosmetixx-market/state', requireAuth, (req, res) => {
   const now = Date.now();
   const staleBefore = now - COSMETIXX_MARKET_ROTATION_MS;
@@ -2167,7 +2179,11 @@ app.get('/cosmetixx-market/state', requireAuth, (req, res) => {
     id: row.id,
     slotIndex: row.slot_index,
     titleId: row.title_id,
+    grader: row.grader || DEFAULT_GRADER,
     grade: row.grade,
+    // Rolled at rotation so the shelf shows what it is selling -- see generateCosmetixxMarketSlots.
+    // Null for CCG/NMG, which have no subgains by definition.
+    subgains: parseSlotSubgains(row),
     price: row.price,
     sold: !!row.sold,
   }));
@@ -2196,11 +2212,11 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
 
   const cashBefore = character.cash;
   character.cash = round2(character.cash - row.price);
-  // CosmetixxMarket mints NMG slabs and only NMG slabs, deliberately: the store is the SYSTEM
-  // buying grading, and the system uses the everyman grader. MGA is a player prestige path you opt
-  // into and pay triple for, and CCG is a player budget choice -- neither is something the game
-  // should hand out on rotation.
-  const gradedId = `${row.title_id}${GRADERS.nmg.suffix}${row.grade}`;
+  // The rotation stocks all three graders (see generateCosmetixxMarketSlots) -- the grader was
+  // decided and priced at rotation, so the buy just honours the row rather than deciding anything.
+  const grader = getGrader(row.grader) || GRADERS[DEFAULT_GRADER];
+  const subs = parseSlotSubgains(row);
+  const gradedId = `${row.title_id}${grader.suffix}${row.grade}`;
   addToInventory(character, gradedId, 1);
 
   // CERT MINTED AT PURCHASE, not at rotation generation. A rotation slab that nobody buys never
@@ -2212,8 +2228,15 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
     userId: user.id,
     gradedId,
     source: 'market',
-    subs: null,
-    event: certEvent('market_buy', { to: buyerName, price: row.price, grade: row.grade }),
+    // The SUBGAINS shown on the shelf are the ones minted onto the cert: what you saw is what you
+    // bought, BLACK LABEL included.
+    subs,
+    event: certEvent('market_buy', {
+      to: buyerName,
+      price: row.price,
+      grade: row.grade,
+      subs: subs ? { gloss: subs.gloss, stitch: subs.stitch, aura: subs.aura, drip: subs.drip } : null,
+    }),
   });
 
   logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'cosmetixxMarket/buy', round2(character.cash - cashBefore), character.cash);
@@ -2222,7 +2245,10 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
   try {
     // Purchase price is public flavor here (a market listing, not PvP theft), unlike duel/robbery
     // amounts -- see the privacy note on recordCityEvent call sites.
-    recordCityEvent('cosmetixxMarket', `🏪 ${character.firstName} ${character.lastName} bought an NMG ${row.grade} ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`);
+    // A Black Label coming off the shelf is loud, the same way one off a reveal is.
+    recordCityEvent('cosmetixxMarket', subs && subs.blackLabel
+      ? `🖤 ${character.firstName} ${character.lastName} bought a BLACK LABEL MGA 10 ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`
+      : `🏪 ${character.firstName} ${character.lastName} bought a ${grader.short} ${row.grade} ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`);
   } catch {
     // Ticker is best-effort flavor -- never let a logging failure break the buy route.
   }

@@ -171,6 +171,17 @@ db.exec(`
   );
 `);
 
+// The rotation stocks all three graders now (it was NMG-only), and MGA slabs carry SUBGAINS rolled
+// at rotation so the shelf can show them before you buy. Same PRAGMA-check migration idiom as the
+// server_state columns above; existing rows default to 'nmg', which is exactly what they were.
+[
+  ['grader', "TEXT NOT NULL DEFAULT 'nmg'"],
+  ['subgains', 'TEXT'],
+].forEach(([col, decl]) => {
+  const has = db.prepare('PRAGMA table_info(cosmetixx_market_slots)').all().some((c) => c.name === col);
+  if (!has) db.exec(`ALTER TABLE cosmetixx_market_slots ADD COLUMN ${col} ${decl}`);
+});
+
 function getCosmetixxMarketSlots() {
   return db.prepare('SELECT * FROM cosmetixx_market_slots ORDER BY slot_index').all();
 }
@@ -178,11 +189,14 @@ function getCosmetixxMarketSlots() {
 // Only called by whichever request won tryClaimCosmetixxMarketRegen above.
 function replaceCosmetixxMarketSlots(slots) {
   const insert = db.prepare(
-    'INSERT INTO cosmetixx_market_slots (slot_index, title_id, grade, price) VALUES (?, ?, ?, ?)'
+    'INSERT INTO cosmetixx_market_slots (slot_index, title_id, grader, grade, subgains, price) VALUES (?, ?, ?, ?, ?, ?)'
   );
   const tx = db.transaction((rows) => {
     db.prepare('DELETE FROM cosmetixx_market_slots').run();
-    rows.forEach((s) => insert.run(s.slotIndex, s.titleId, s.grade, s.price));
+    rows.forEach((s) => insert.run(
+      s.slotIndex, s.titleId, s.grader || 'nmg', s.grade,
+      s.subgains ? JSON.stringify(s.subgains) : null, s.price,
+    ));
   });
   tx(slots);
 }

@@ -839,10 +839,42 @@ function pickDistinctCosmetixxTitles(count) {
   return picked;
 }
 
+// The rotation stocks all three graders rather than NMG alone. The store used to mint NMG and only
+// NMG on the reasoning that the SYSTEM buys grading and the system uses the everyman grader -- but
+// that made every shelf identical in case art, and hid two thirds of the grading feature from
+// anyone who buys their slabs instead of grading them. Weighted so NMG still leads and an MGA slab
+// on the shelf stays an event; tune here, nothing else reads these numbers.
+const COSMETIXX_MARKET_GRADER_WEIGHTS = { ccg: 30, nmg: 45, mga: 25 };
+
+function rollCosmetixxMarketGrader() {
+  const entries = Object.entries(COSMETIXX_MARKET_GRADER_WEIGHTS);
+  const total = entries.reduce((sum, [, w]) => sum + w, 0);
+  let r = Math.random() * total;
+  for (const [graderId, weight] of entries) {
+    if (r < weight) return graderId;
+    r -= weight;
+  }
+  return DEFAULT_GRADER;
+}
+
 function generateCosmetixxMarketSlots() {
   return pickDistinctCosmetixxTitles(COSMETIXX_MARKET_SLOT_COUNT).map((title, slotIndex) => {
+    const graderId = rollCosmetixxMarketGrader();
     const grade = rollNmgGrade();
-    return { slotIndex, titleId: title.id, grade, price: cosmetixxSlabPrice(title, grade) };
+    // SUBGAINS are rolled HERE, at rotation, not at purchase -- unlike the cert, which is minted at
+    // purchase because an unsold slab never existed. The subgains are part of what the shelf is
+    // advertising: a buyer must be able to see the four numbers (and a BLACK LABEL case) before
+    // paying, the same way they see the grade. The purchase then mints the cert with exactly these
+    // values, so the slab you get is the slab you looked at.
+    const subs = rollSubgains(graderId, grade);
+    // Same mult, applied the same way, as the KOLLECTOR valuation in gradedCollectionValue() --
+    // outside cosmetixxSlabPrice() rather than inside it, so there is one convention and no risk of
+    // double-applying. A CCG slab therefore costs half, which is exactly what a CCG slab is worth.
+    const price = Math.max(
+      COSMETIXX_MARKET_MIN_PRICE,
+      Math.round(cosmetixxSlabPrice(title, grade) * graderValueMult(graderId) / 100) * 100,
+    );
+    return { slotIndex, titleId: title.id, grader: graderId, grade, subgains: subs, price };
   });
 }
 
@@ -4752,6 +4784,7 @@ module.exports = {
   COSMETIXX_MARKET_SLOT_COUNT,
   COSMETIXX_MARKET_ROTATION_MS,
   generateCosmetixxMarketSlots,
+  COSMETIXX_MARKET_GRADER_WEIGHTS,
   REGISTRY_SETS,
   REGISTRY_REWARD_TITLES,
   REGISTRY_MASTER_SET_GPA,
