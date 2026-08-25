@@ -4136,7 +4136,7 @@ function altcoinFullBuyoutPayout(coin, holdings) {
 
 // ---------- Player Profiles ----------
 const PROFILE_SHOWCASE_MAX = 4;
-const PROFILE_SLAB_SHOWCASE_MAX = 6;
+const PROFILE_SLAB_SHOWCASE_MAX = 8;
 const PROFILE_SLAB_MARKET_MAX = 6;
 const PROFILE_STATUS_MAX_LEN = 100;
 const PROFILE_WALL_POST_MAX_LEN = 300;
