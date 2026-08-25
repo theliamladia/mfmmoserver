@@ -1915,7 +1915,8 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
 
   const active = getActiveNmgSlots(user.id);
-  if (active.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: 'All 4 grading slots are full.' });
+  const graderActive = active.filter((s) => s.grader === grader.id);
+  if (graderActive.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: `All 4 ${grader.short} grading slots are full.` });
 
   const baseId = nmgBaseIdOf(stackId);
   // Every title is gradeable -- the server has no title catalog of its own (see
@@ -1937,7 +1938,7 @@ app.post('/nmg/submit', requireAuth, (req, res) => {
   character.cash = round2(character.cash - tierDef.cost);
   removeFromInventory(character, stackId, 1);
 
-  const usedIndexes = new Set(active.map((s) => s.slot_index));
+  const usedIndexes = new Set(graderActive.map((s) => s.slot_index));
   const slotIndex = [0, 1, 2, 3].find((i) => !usedIndexes.has(i));
   const now = Date.now();
   // Testing/demo override for the admin account only -- full tier price still applies, only the
@@ -1984,7 +1985,8 @@ app.post('/nmg/regrade', requireAuth, (req, res) => {
   if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
 
   const active = getActiveNmgSlots(user.id);
-  if (active.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: 'All 4 grading slots are full.' });
+  const graderActive = active.filter((s) => s.grader === grader.id);
+  if (graderActive.length >= NMG_MAX_SLOTS) return res.status(409).json({ ok: false, reason: `All 4 ${grader.short} grading slots are full.` });
 
   if (inventoryQty(character, stackId) < 1) return res.status(400).json({ ok: false, reason: "You don't own that slab." });
   if (character.cash < fee) return res.status(402).json({ ok: false, reason: 'Not enough Floydbucks.' });
@@ -1995,7 +1997,7 @@ app.post('/nmg/regrade', requireAuth, (req, res) => {
   // The old graded id is gone from here on -- unpin it anywhere it was displayed by id.
   detachGradedIdFromShowcases(character, stackId);
 
-  const usedIndexes = new Set(active.map((s) => s.slot_index));
+  const usedIndexes = new Set(graderActive.map((s) => s.slot_index));
   const slotIndex = [0, 1, 2, 3].find((i) => !usedIndexes.has(i));
   const now = Date.now();
   const isAdminTester = (req.user?.username || '').toLowerCase() === ADMIN_USERNAME;
