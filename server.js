@@ -2082,11 +2082,11 @@ app.post('/nmg/reveal', requireAuth, (req, res) => {
 
   try {
     // High-signal only -- every reveal (including low grades) would drown out the rest of the
-    // ticker, so only near-perfect slabs get a city-wide callout. A Black Label is loud regardless
+    // ticker, so only perfect slabs get a city-wide callout. A Black Label is loud regardless
     // of anything else: it is the rarest outcome in the whole grading system.
     if (subs && subs.blackLabel) {
       recordCityEvent('nmg', `🖤 ${name} pulled a BLACK LABEL MGA 10 on ${prettifyTitleId(row.title_id)} -- all four SUBGAINS perfect`);
-    } else if (grade >= 8) {
+    } else if (grade === 10) {
       recordCityEvent('nmg', `💎 ${name} pulled a ${grader.short} ${grade} on ${prettifyTitleId(row.title_id)}`);
     }
   } catch {
@@ -2245,10 +2245,13 @@ app.post('/cosmetixx-market/buy', requireAuth, (req, res) => {
   try {
     // Purchase price is public flavor here (a market listing, not PvP theft), unlike duel/robbery
     // amounts -- see the privacy note on recordCityEvent call sites.
-    // A Black Label coming off the shelf is loud, the same way one off a reveal is.
-    recordCityEvent('cosmetixxMarket', subs && subs.blackLabel
-      ? `🖤 ${character.firstName} ${character.lastName} bought a BLACK LABEL MGA 10 ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`
-      : `🏪 ${character.firstName} ${character.lastName} bought a ${grader.short} ${row.grade} ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`);
+    // A Black Label coming off the shelf is loud, the same way one off a reveal is. Same gate as
+    // the reveal callout: only a Black Label or a flat grade-10 is ticker-worthy.
+    if ((subs && subs.blackLabel) || row.grade === 10) {
+      recordCityEvent('cosmetixxMarket', subs && subs.blackLabel
+        ? `🖤 ${character.firstName} ${character.lastName} bought a BLACK LABEL MGA 10 ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`
+        : `🏪 ${character.firstName} ${character.lastName} bought a ${grader.short} ${row.grade} ${prettifyTitleId(row.title_id)} slab for $${row.price.toLocaleString()} on CosmetixxMarket`);
+    }
   } catch {
     // Ticker is best-effort flavor -- never let a logging failure break the buy route.
   }
@@ -3335,7 +3338,7 @@ function prettifyTitleId(titleId) {
     .join(' ');
 }
 
-const CITY_EVENTS_FEED_LIMIT = 30;
+const CITY_EVENTS_FEED_LIMIT = 12;
 
 app.get('/city/events', requireAuth, (req, res) => {
   res.json({ ok: true, events: getRecentCityEvents(CITY_EVENTS_FEED_LIMIT).map((row) => ({
