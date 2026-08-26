@@ -135,6 +135,30 @@ function refundCrateStock(crateKey, qty) {
   db.prepare(`UPDATE server_state SET ${col} = ${col} + ? WHERE id = 1`).run(qty);
 }
 
+// SHALOM CRATE stock: globally limited to 333 openings, same bolt-on-column/reserve-refund idiom
+// as red/blue_crate_remaining above -- a single column since (unlike RED/BLUE) there's only one
+// crate, not a pair.
+['shalom_crate_remaining'].forEach((col) => {
+  const has = db.prepare('PRAGMA table_info(server_state)').all().some((c) => c.name === col);
+  if (!has) {
+    db.exec(`ALTER TABLE server_state ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 333`);
+  }
+});
+
+function getShalomCrateStock() {
+  return db.prepare('SELECT shalom_crate_remaining FROM server_state WHERE id = 1').get().shalom_crate_remaining;
+}
+
+// Same atomic reserve as trySpendCrateStock -- the WHERE guard makes concurrent spins safe.
+function trySpendShalomCrateStock(qty) {
+  const result = db.prepare('UPDATE server_state SET shalom_crate_remaining = shalom_crate_remaining - ? WHERE id = 1 AND shalom_crate_remaining >= ?').run(qty, qty);
+  return result.changes > 0;
+}
+
+function refundShalomCrateStock(qty) {
+  db.prepare('UPDATE server_state SET shalom_crate_remaining = shalom_crate_remaining + ? WHERE id = 1').run(qty);
+}
+
 // CosmetixxMarket: 5 system-generated graded-title slabs, shared across every player, that rotate
 // every 24h. cosmetixx_market_generated_at is the same "reserve/claim via a conditional UPDATE"
 // idiom as red/blue_crate_remaining above, just gating a timestamp instead of a quantity.
@@ -1506,6 +1530,9 @@ module.exports = {
   getCrateStock,
   trySpendCrateStock,
   refundCrateStock,
+  getShalomCrateStock,
+  trySpendShalomCrateStock,
+  refundShalomCrateStock,
   tryClaimCosmetixxMarketRegen,
   getCosmetixxMarketGeneratedAt,
   getCosmetixxMarketSlots,

@@ -538,6 +538,20 @@ const COSMETIXX_MARKET_TITLES = [
   { id: 'wfTsunade', weight: 3, rarity: 'rare', crateCost: 50000 },
   { id: 'wfPower', weight: 0.05, rarity: 'mythic', crateCost: 50000 },
   { id: 'wfRukia', weight: 0.05, rarity: 'mythic', crateCost: 50000 },
+  // SHALOM_CRATE_TITLES (mfmmoalpha/js/core.js), crateCost 3333
+  { id: 'shNetanyahu', weight: 0.5, rarity: 'mythic', crateCost: 3333 },
+  { id: 'shGalGadot', weight: 2.5, rarity: 'rare', crateCost: 3333 },
+  { id: 'shGoldaMeir', weight: 4, rarity: 'rare', crateCost: 3333 },
+  { id: 'shIronDome', weight: 5, rarity: 'rare', crateCost: 3333 },
+  { id: 'shMossad', weight: 5, rarity: 'rare', crateCost: 3333 },
+  { id: 'shStartupNation', weight: 7, rarity: 'uncommon', crateCost: 3333 },
+  { id: 'shKravMaga', weight: 7, rarity: 'uncommon', crateCost: 3333 },
+  { id: 'shEurovision', weight: 7, rarity: 'uncommon', crateCost: 3333 },
+  { id: 'shDeadSea', weight: 8, rarity: 'uncommon', crateCost: 3333 },
+  { id: 'shIsraelFlag', weight: 16, rarity: 'common', crateCost: 3333 },
+  { id: 'shHummus', weight: 16, rarity: 'common', crateCost: 3333 },
+  { id: 'shBamba', weight: 11, rarity: 'common', crateCost: 3333 },
+  { id: 'shShekel', weight: 11, rarity: 'common', crateCost: 3333 },
 ];
 
 // The subset the daily rotation may actually stock. Valuation code reads COSMETIXX_MARKET_TITLES
@@ -2146,6 +2160,18 @@ function doBuyGun(character, itemId, activeModifier) {
 const RED_BLUE_CRATE_COST = 20000;
 function doSpinRedBlueCrate(character, qty) {
   const totalCost = RED_BLUE_CRATE_COST * qty;
+  if (character.cash < totalCost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash -= totalCost;
+  return { ok: true, character };
+}
+
+// SHALOM CRATE: exact same split as RED/BLUE above -- cash + character.titles/inventory stay
+// client-authoritative, the 333-total global cap is enforced server-side (db.trySpendShalomCrateStock,
+// reserved in server.js before this runs) since it's shared across every player. This only handles
+// the cash side.
+const SHALOM_CRATE_COST = 3333;
+function doSpinShalomCrate(character, qty) {
+  const totalCost = SHALOM_CRATE_COST * qty;
   if (character.cash < totalCost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash -= totalCost;
   return { ok: true, character };
@@ -4609,6 +4635,8 @@ module.exports = {
   doCrime,
   doSpinRedBlueCrate,
   RED_BLUE_CRATE_COST,
+  doSpinShalomCrate,
+  SHALOM_CRATE_COST,
   doWorkout,
   doSetSteroidTier,
   doRoidEscape,

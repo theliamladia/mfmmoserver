@@ -56,6 +56,9 @@ const {
   getCrateStock,
   trySpendCrateStock,
   refundCrateStock,
+  getShalomCrateStock,
+  trySpendShalomCrateStock,
+  refundShalomCrateStock,
   tryClaimCosmetixxMarketRegen,
   getCosmetixxMarketGeneratedAt,
   getCosmetixxMarketSlots,
@@ -166,6 +169,8 @@ const {
   doSlotSpin,
   doSpinRedBlueCrate,
   RED_BLUE_CRATE_COST,
+  doSpinShalomCrate,
+  SHALOM_CRATE_COST,
   drawCard,
   handTotal,
   isBlackjack,
@@ -1461,6 +1466,44 @@ app.post('/crates/redblue/spin', requireAuth, (req, res) => {
 
   const stock = getCrateStock();
   res.json({ ok: true, character, remaining: crateKey === 'red' ? stock.red_crate_remaining : stock.blue_crate_remaining });
+});
+
+// SHALOM CRATE: globally limited to 333 openings -- exact same split as RED/BLUE above (reserve
+// stock atomically, then cash, refunding the stock reservation if the cash check fails).
+app.get('/crates/shalom/stock', requireAuth, (req, res) => {
+  res.json({ ok: true, remaining: getShalomCrateStock(), cost: SHALOM_CRATE_COST });
+});
+
+app.post('/crates/shalom/spin', requireAuth, (req, res) => {
+  if (getServerState().paused) return res.status(423).json({ ok: false, reason: 'The game is paused.' });
+  if (isMaintenanceBlocked(req)) return res.status(503).json({ ok: false, reason: MAINTENANCE_MESSAGE });
+
+  const { qty } = req.body || {};
+  const spinQty = Math.max(1, Math.min(10, Math.round(Number(qty) || 1)));
+
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  if (isSlimed(character)) return res.status(423).json({ ok: false, reason: 'You just got slimed. Try again once the lockout ends.' });
+
+  if (!trySpendShalomCrateStock(spinQty)) {
+    return res.status(409).json({ ok: false, reason: 'Sold out! No SHALOM CRATE supply remaining.' });
+  }
+
+  const cashBefore = character.cash;
+  const result = doSpinShalomCrate(character, spinQty);
+  if (!result.ok) {
+    refundShalomCrateStock(spinQty);
+    return res.status(429).json(result);
+  }
+
+  const delta = round2(character.cash - cashBefore);
+  if (delta !== 0) {
+    logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'doSpinShalomCrate', delta, character.cash);
+  }
+  saveCharacter(user.id, character);
+
+  res.json({ ok: true, character, remaining: getShalomCrateStock() });
 });
 
 // ---------- Grading cert registry: hooks, reconcile, Pop Report, Cert Lookup ----------
