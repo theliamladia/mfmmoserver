@@ -969,6 +969,15 @@ function getMilosOnlineUsers(sinceTs) {
   return db.prepare('SELECT username, character_json FROM users WHERE milos_last_seen >= ?').all(sinceTs);
 }
 
+// Full player directory (GET /players/all): every registered account, plus milos_last_seen so the
+// route can flag each row online/offline against the same MILOS_ONLINE_WINDOW_MS /players/online
+// uses. Deliberately a separate query from getAllUsersForLeaderboard rather than bolting the column
+// onto that one -- that query's shape is already relied on by several unrelated admin/leaderboard
+// call sites that have no business receiving a presence timestamp.
+function getAllUsersForDirectory() {
+  return db.prepare('SELECT id, username, character_json, milos_last_seen FROM users').all();
+}
+
 // PvP duels: a real shared table (unlike character.combat, which is PvE-only and resolved
 // synchronously inside a single request) since both participants -- and their two separate
 // browsers polling independently -- need to see the same authoritative turn/HP state.
@@ -1521,6 +1530,7 @@ module.exports = {
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,
+  getAllUsersForDirectory,
   createDuelChallenge,
   getDuelById,
   getPendingDuelForTarget,

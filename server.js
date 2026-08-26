@@ -80,6 +80,7 @@ const {
   touchMilosPresence,
   clearMilosPresence,
   getMilosOnlineUsers,
+  getAllUsersForDirectory,
   createDuelChallenge,
   getDuelById,
   getPendingDuelForTarget,
@@ -507,6 +508,65 @@ app.get('/players/online', requireAuth, (req, res) => {
   const pendingMarriageProposal = pendingMarriage ? { id: pendingMarriage.id, proposerName: pendingMarriage.proposer_name } : null;
 
   res.json({ ok: true, players, pendingDuelChallenge, pendingMarriageProposal });
+});
+
+// Full player directory (mfmmoalpha's "Players" subtab in New Milos City): every registered
+// account, not just who's currently in Milos. Same "client resolves display" convention as
+// /players/online above, but a full character per player for every account would be a much fatter
+// payload here (this is every account ever registered, not just who happens to be online right
+// now) and would leak plenty of non-public state (cash, inventory, wall posts, privacy-toggled
+// fields, etc.) to anyone just browsing the roster. So this sends a purpose-shaped subset instead --
+// exactly the fields js/market.js's displayBadgeMarkupFor() (and its allTitleDefsFor/getItemDef
+// dependencies) actually read, plus the display-name fields and an online flag. See mfmmoalpha's
+// js/milos.js Players directory rendering for the client side of this contract.
+app.get('/players/all', requireAuth, (req, res) => {
+  const rows = getAllUsersForDirectory();
+  const onlineSince = Date.now() - MILOS_ONLINE_WINDOW_MS;
+
+  const players = rows.map((row) => {
+    const character = JSON.parse(row.character_json);
+    const equippedTitleId = character.titles.equipped;
+    // A custom title's def only ever lives inside its creator's own save (there's no server-side
+    // title catalog to look it up in -- see the /profile/:username comment above). If the equipped
+    // id matches one of THIS player's custom titles, ship just that one def so the viewer's client
+    // can resolve it; any other equipped id is a built-in title the viewer's client already has in
+    // its static catalogs, so nothing extra needs to travel for it. Never ship the rest of this
+    // player's custom titles list.
+    const customMatch = equippedTitleId
+      ? (character.titles.customTitles || []).find((t) => t.id === equippedTitleId)
+      : null;
+
+    return {
+      username: row.username,
+      firstName: character.firstName,
+      lastName: character.lastName,
+      // Raw stats, not a pre-computed level/rank string -- displayBadgeMarkupFor()'s untitled-player
+      // fallback reads otherChar.stats directly (health/attack/speed/defense/looks, to decide
+      // CIVILIAN vs PEAK CIVILIAN), and the client's own computeLevel() takes the same stats shape,
+      // so sending these once covers both without duplicating either formula server-side. These are
+      // already visible to any other player via GET /profile/:username with no privacy toggle over
+      // them, so this isn't a new exposure.
+      stats: character.stats,
+      titles: {
+        equipped: equippedTitleId,
+        ...(customMatch ? { customTitles: [customMatch] } : {}),
+      },
+      badges: { equipped: character.badges && character.badges.equipped },
+      online: row.milos_last_seen >= onlineSince,
+    };
+  });
+
+  // Online first, then alphabetical by first/last name -- matches how Players Online already reads
+  // (online, most-recently-active-feeling first) while still giving offline browsing a stable order.
+  players.sort((a, b) => {
+    if (a.online !== b.online) return a.online ? -1 : 1;
+    return (a.firstName + a.lastName).localeCompare(b.firstName + b.lastName);
+  });
+
+  // No pagination -- the player count is small enough that the whole directory fits in one response.
+  // If the population grows enough for this to matter, add ?page=/?limit= here the same way
+  // /profile/:username paginates its wall, rather than changing this response shape wholesale.
+  res.json({ ok: true, players });
 });
 
 // ---------- Player Profiles ----------
