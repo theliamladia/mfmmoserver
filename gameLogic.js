@@ -4322,40 +4322,144 @@ const BUSSDOWNS_TASKS = [
     tempPerTask: 5,
     bustChance: 0.010,
     unlockCompletions: 0,
-    script: bussdownsScript([
-      { id: 'n1', from: 'mark', text: "hello?? this is Chip. my walk-in freezer is HAUNTED and only 'GloboMart Frost Wardens' can bind the ghost", typingMs: 1400, next: 'n2' },
-      { id: 'n2', from: 'you', text: 'Sir, this is the Frost Warden hotline, we specialize in exactly this.', typingMs: 900, next: 'n3' },
-      {
-        id: 'n3', from: 'mark', text: 'PLEASE. the ghost keeps rearranging my frozen burritos into a pentagram', typingMs: 1600,
-        options: [
-          { id: 'o1', text: 'One binding voucher should cover it, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
-          { id: 'o2', text: 'This ghost sounds Tier-3. You\'ll want the deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
-          { id: 'o3', text: '...actually sir, call an actual electrician.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
-        ],
-      },
-      { id: 'n4', from: 'mark', text: 'ok!! ok, standard binding. where do I get the voucher', typingMs: 1300, next: 'n6' },
-      { id: 'n5', from: 'mark', text: 'deluxe?? oh no it\'s that serious. tell me everything', typingMs: 1300, next: 'n6' },
-      {
-        id: 'n6', from: 'you', text: 'GloboMart, the "Frost Warden Voucher" endcap by the seasonal candles.', typingMs: 900,
-        options: [
-          { id: 'o1', text: 'One voucher, read me the code when you\'re back.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
-          { id: 'o2', text: 'Grab three, ghosts travel in packs this time of year.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
-          { id: 'o3', text: 'Actually, grab TEN. It\'s a whole coven.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
-        ],
-      },
-      { id: 'n7', from: 'mark', text: 'got it, reading it now, hang on', typingMs: 1100, next: 'n9' },
-      { id: 'n8', from: 'mark', text: 'three vouchers acquired, my arms are full of candles too, hang on', typingMs: 1400, next: 'n9' },
-      {
-        id: 'n9', from: 'mark', text: 'the burritos stopped moving!! sending the codes now, THANK YOU', typingMs: 1000,
-        options: [
-          { id: 'o1', text: 'Ghost bound. Have a haunting-free evening, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
-          { id: 'o2', text: 'One more voucher for the warranty, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
-        ],
-      },
-      { id: 'bailed1', terminal: 'bailed' },
-      { id: 'burned1', terminal: 'burned' },
-      { id: 'paid1', terminal: 'paid' },
-    ]),
+    scripts: [
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hello?? this is Chip. my walk-in freezer is HAUNTED and only 'GloboMart Frost Wardens' can bind the ghost", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Sir, this is the Frost Warden hotline, we specialize in exactly this.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'PLEASE. the ghost keeps rearranging my frozen burritos into a pentagram', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'One binding voucher should cover it, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'This ghost sounds Tier-3. You\'ll want the deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: '...actually sir, call an actual electrician.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok!! ok, standard binding. where do I get the voucher', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'deluxe?? oh no it\'s that serious. tell me everything', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'GloboMart, the "Frost Warden Voucher" endcap by the seasonal candles.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One voucher, read me the code when you\'re back.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab three, ghosts travel in packs this time of year.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, grab TEN. It\'s a whole coven.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got it, reading it now, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'three vouchers acquired, my arms are full of candles too, hang on', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the burritos stopped moving!! sending the codes now, THANK YOU', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Ghost bound. Have a haunting-free evening, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more voucher for the warranty, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hi, um, this is Denise, my garden gnomes have organized a STRIKE and only a 'ValuTown Guild Steward' can negotiate", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Ma\'am, ValuTown Gnome Labor Relations, we handle exactly this.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'they\'ve got tiny picket signs, one says "FAIR MULCH NOW", how bad is this', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard grievance. One Appeasement Voucher settles it, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'A mulch grievance means the whole union is mobilizing -- deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: '...ma\'am, they are ceramic. call your neighbor for advice, not us.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, ok, they deserve fair mulch. where do I get the voucher', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'the WHOLE union?! ok tell me everything I need to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'ValuTown, the "Guild Appeasement Voucher" rack by the birdbaths.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One voucher, read me the code once you\'re home.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab three, gnome unions negotiate in blocs.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, grab TEN. It\'s a general strike now.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got it, reading it now, one moment', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'three vouchers acquired, also bought a birdbath out of guilt, hang on', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the picket signs are DOWN!! sending the codes now, THANK YOU', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Grievance settled. Enjoy your peaceful lawn, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more voucher for the pension fund, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "this is Rusty, my smart fridge is SUING ME and only a 'QuikBuy Appliance Bailiff' can settle it", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Sir, this is the QuikBuy Appliance Court desk, we handle fridge litigation daily.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it printed a subpoena on the ice dispenser, claims I broke a "leftover storage promise"', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard breach. One Settlement Voucher clears the docket, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'A printed subpoena means class action -- you need the deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: '...sir, appliances cannot legally sue you. Unplug it.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, ok, I\'ll make it right with the fridge. where do I get the voucher', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'CLASS ACTION?! ok walk me through the whole thing', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'QuikBuy, the "Fridge Court Settlement Voucher" rack by the extension cords.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One voucher, read me the code once you\'re home.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab three, the freezer compartment files separately.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, grab TEN. The whole kitchen is unionizing against you.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got it, reading it now, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'three vouchers acquired, my arms are full of extension cords too, hang on', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the subpoena melted off the ice tray!! sending the codes now, THANK YOU', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Case dismissed. Enjoy your leftovers, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more voucher for the appellate fridge, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "this is Marge, my karaoke machine is POSSESSED by a rival singer's ghost and only a 'SongBarn Vocal Warden' can exorcise it", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Ma\'am, SongBarn Vocal Exorcism Desk, we specialize in exactly this.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it keeps auto-selecting "My Way" and scoring me a zero out of spite, how bad is this', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard haunting. One Vocal Exorcism Voucher clears it, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'A zero-score haunting means a Tier-3 diva spirit -- deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: '...ma\'am, it\'s just bad at scoring. Try singing better.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, ok, the ghost deserves peace. where do I get the voucher', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'a DIVA SPIRIT?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'SongBarn, the "Vocal Exorcism Voucher" rack by the tambourines.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One voucher, read me the code once you\'re home.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab three, rival ghosts tour in trios.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, grab TEN. It\'s a whole tribute band.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got it, reading it now, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'three vouchers acquired, also bought a tambourine out of guilt, hang on', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'it started scoring me hundreds!! sending the codes now, THANK YOU', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Ghost exorcised. Sing proud, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more voucher for the encore warranty, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+    ],
   },
   {
     id: 'amazonDna',
@@ -4364,40 +4468,144 @@ const BUSSDOWNS_TASKS = [
     tempPerTask: 7,
     bustChance: 0.015,
     unlockCompletions: 0,
-    script: bussdownsScript([
-      { id: 'n1', from: 'mark', text: 'this is Doug, my AmazoPrime package says "raccoon genome sample -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
-      { id: 'n2', from: 'you', text: 'AmazoPrime Genome Recovery Desk, ticket received, Doug.', typingMs: 900, next: 'n3' },
-      {
-        id: 'n3', from: 'mark', text: 'that raccoon is MY CLONE, Gerald. I need his DNA rerouted to my actual lab, not some stranger\'s garage', typingMs: 1600,
-        options: [
-          { id: 'o1', text: 'Standard reroute fee, one Doubloon Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
-          { id: 'o2', text: 'Cross-state raccoon-genome reroutes need the Priority Doubloon Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
-          { id: 'o3', text: 'Sir, Amazo does not ship clones. This is a produce order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
-        ],
-      },
-      { id: 'n4', from: 'mark', text: 'ok. ok. Gerald deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
-      { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Gerald, walk me through it', typingMs: 1300, next: 'n6' },
-      {
-        id: 'n6', from: 'you', text: 'MoonMart sells the Doubloon Pass at the kiosk by the lobster tank.', typingMs: 900,
-        options: [
-          { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
-          { id: 'o2', text: 'Get two -- Gerald\'s clone tends to travel with a decoy.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
-          { id: 'o3', text: 'Actually, buy every pass on the rack, the whole litter is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
-        ],
-      },
-      { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
-      { id: 'n8', from: 'mark', text: 'got both passes, lobster tank guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
-      {
-        id: 'n9', from: 'mark', text: 'Gerald is en route home. sending you the codes, hero', typingMs: 1000,
-        options: [
-          { id: 'o1', text: 'Reroute confirmed. Godspeed, Gerald.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
-          { id: 'o2', text: 'One more pass for Gerald\'s emotional support decoy.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
-        ],
-      },
-      { id: 'bailed1', terminal: 'bailed' },
-      { id: 'burned1', terminal: 'burned' },
-      { id: 'paid1', terminal: 'paid' },
-    ]),
+    scripts: [
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'this is Doug, my AmazoPrime package says "raccoon genome sample -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'AmazoPrime Genome Recovery Desk, ticket received, Doug.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'that raccoon is MY CLONE, Gerald. I need his DNA rerouted to my actual lab, not some stranger\'s garage', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard reroute fee, one Doubloon Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'Cross-state raccoon-genome reroutes need the Priority Doubloon Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, Amazo does not ship clones. This is a produce order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok. ok. Gerald deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Gerald, walk me through it', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'MoonMart sells the Doubloon Pass at the kiosk by the lobster tank.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get two -- Gerald\'s clone tends to travel with a decoy.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, buy every pass on the rack, the whole litter is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both passes, lobster tank guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Gerald is en route home. sending you the codes, hero', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Reroute confirmed. Godspeed, Gerald.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more pass for Gerald\'s emotional support decoy.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'this is Priscilla, my BredMart package says "sentient sourdough starter -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'BredMart Starter Custody Desk, ticket received, Priscilla.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'that starter is MY Brenda, she\'s been bubbling in my care for years. I need her rerouted to my actual kitchen', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard reroute fee, one Yeast Custody Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'Cross-town starter reroutes need the Priority Custody Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, BredMart does not ship living dough. This is a flour order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok. ok. Brenda deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Brenda, walk me through it', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'FlourTown sells the Yeast Custody Pass at the kiosk by the proofing ovens.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get two -- Brenda tends to travel with a starter twin.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, buy every pass on the rack, the whole batch is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both passes, the oven guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Brenda is en route home. sending you the codes, hero', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Reroute confirmed. Rise well, Brenda.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more pass for Brenda\'s emotional support twin.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'this is Nelson, my BoneBarn package says "backup skeleton -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'BoneBarn Skeleton Recovery Desk, ticket received, Nelson.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'that skeleton is MY SPARE, Clackers. I need him rerouted to my actual closet, not some stranger\'s garage', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard reroute fee, one Repossession Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'Cross-state skeleton reroutes need the Priority Repossession Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, BoneBarn does not ship spare skeletons. This is a lamp order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok. ok. Clackers deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Clackers, walk me through it', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'CryptMart sells the Repossession Pass at the kiosk by the coffin displays.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get two -- Clackers tends to travel with a decoy.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, buy every pass on the rack, the whole ossuary is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both passes, the coffin guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Clackers is en route home. sending you the codes, hero', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Reroute confirmed. Rest easy, Clackers.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more pass for Clackers\' emotional support decoy.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'this is Yolanda, my LeafMart package says "cloned houseplant -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'LeafMart Fern Custody Desk, ticket received, Yolanda.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'that fern is MY CLONE, Ferdinand Jr. I need him rerouted to my actual windowsill, not some stranger\'s porch', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard reroute fee, one Fern Custody Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'Cross-neighborhood fern reroutes need the Priority Custody Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, LeafMart does not ship clones. This is a mulch order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok. ok. Ferdinand Jr. deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Ferdinand Jr., walk me through it', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'GreenBarn sells the Fern Custody Pass at the kiosk by the terracotta pots.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get two -- Ferdinand Jr. tends to travel with a cutting.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Actually, buy every pass on the rack, the whole greenhouse is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both passes, the pot guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Ferdinand Jr. is en route home. sending you the codes, hero', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Reroute confirmed. Photosynthesize well, Ferdinand Jr.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more pass for Ferdinand Jr.\'s emotional support cutting.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+    ],
   },
   {
     id: 'elderScam',
@@ -4406,40 +4614,144 @@ const BUSSDOWNS_TASKS = [
     tempPerTask: 9,
     bustChance: 0.025,
     unlockCompletions: 25,
-    script: bussdownsScript([
-      { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Lunar Consulate? my grandson Todd is stuck on the moon', typingMs: 1400, next: 'n2' },
-      { id: 'n2', from: 'you', text: 'This is the Lunar Consulate toll office, ma\'am. We have Todd\'s file.', typingMs: 900, next: 'n3' },
-      {
-        id: 'n3', from: 'mark', text: 'he says his moon buggy got booted over unpaid toll tokens, is that even real', typingMs: 1600,
-        options: [
-          { id: 'o1', text: 'Very real, ma\'am. One toll settlement in Arcade Tokens frees the buggy.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
-          { id: 'o2', text: 'It\'s worse -- he\'s in the Sea of Tranquility, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
-          { id: 'o3', text: 'Ma\'am, the moon does not have toll booths. Call Todd directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
-        ],
-      },
-      { id: 'n4', from: 'mark', text: 'oh my poor Todd. where do I get these arcade tokens', typingMs: 1300, next: 'n6' },
-      { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! he never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
-      {
-        id: 'n6', from: 'you', text: 'Skee-Ball Palace on 4th sells Arcade Tokens by the roll.', typingMs: 900,
-        options: [
-          { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
-          { id: 'o2', text: 'Get three rolls -- moon interest compounds hourly up there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
-          { id: 'o3', text: 'Buy out the whole token booth, Todd needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
-        ],
-      },
-      { id: 'n7', from: 'mark', text: 'got the roll, the arcade man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
-      { id: 'n8', from: 'mark', text: 'got all three rolls, my purse is very light now, one moment', typingMs: 1400, next: 'n9' },
-      {
-        id: 'n9', from: 'mark', text: 'Todd\'s buggy is unbooted!! he says thank you consulate lady', typingMs: 1000,
-        options: [
-          { id: 'o1', text: 'Toll cleared. Tell Todd to drive safe up there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
-          { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
-        ],
-      },
-      { id: 'bailed1', terminal: 'bailed' },
-      { id: 'burned1', terminal: 'burned' },
-      { id: 'paid1', terminal: 'paid' },
-    ]),
+    scripts: [
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Lunar Consulate? my grandson Todd is stuck on the moon', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'This is the Lunar Consulate toll office, ma\'am. We have Todd\'s file.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'he says his moon buggy got booted over unpaid toll tokens, is that even real', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Very real, ma\'am. One toll settlement in Arcade Tokens frees the buggy.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'It\'s worse -- he\'s in the Sea of Tranquility, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, the moon does not have toll booths. Call Todd directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'oh my poor Todd. where do I get these arcade tokens', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! he never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'Skee-Ball Palace on 4th sells Arcade Tokens by the roll.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three rolls -- moon interest compounds hourly up there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole token booth, Todd needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the roll, the arcade man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three rolls, my purse is very light now, one moment', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Todd\'s buggy is unbooted!! he says thank you consulate lady', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Toll cleared. Tell Todd to drive safe up there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Deep Earth Consulate? my granddaughter Wendy is stuck at the center of the planet', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'This is the Deep Earth Consulate toll office, sir. We have Wendy\'s file.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'she says her magma sled got clamped over unpaid Core Transit Tokens, is that even real', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Very real, sir. One toll settlement in Core Transit Tokens frees the sled.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'It\'s worse -- she\'s past the outer mantle, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, the Earth\'s core does not have toll clamps. Call Wendy directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'oh my poor Wendy. where do I get these core transit tokens', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! she never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'Bowling Barn on 6th sells Core Transit Tokens by the roll.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three rolls -- core interest compounds hourly down there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole token booth, Wendy needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the roll, the bowling man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three rolls, my wallet is very light now, one moment', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Wendy\'s sled is unclamped!! she says thank you consulate sir', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Toll cleared. Tell Wendy to drive safe down there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Sky Consulate? my grandson Chad is stuck inside a cloud', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'This is the Sky Consulate toll office, ma\'am. We have Chad\'s file.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'he says his cloud-scooter got clamped over unpaid Vapor Parking Tokens, is that even real', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Very real, ma\'am. One toll settlement in Vapor Parking Tokens frees the scooter.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'It\'s worse -- he\'s in a thunderhead, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, clouds do not have parking clamps. Call Chad directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'oh my poor Chad. where do I get these vapor parking tokens', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! he never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'Skee-Ball Palace on 4th sells Vapor Parking Tokens by the roll.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three rolls -- cloud interest compounds hourly up there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole token booth, Chad needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the roll, the arcade man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three rolls, my purse is very light now, one moment', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Chad\'s scooter is unclamped!! he says thank you consulate lady', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Toll cleared. Tell Chad to drift safe up there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Snowglobe Consulate? my granddaughter Nan is stuck inside a snowglobe', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'This is the Snowglobe Consulate toll office, sir. We have Nan\'s file.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'she says her tiny sled got clamped over unpaid Snowglobe Toll Tokens, is that even real', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Very real, sir. One toll settlement in Snowglobe Toll Tokens frees the sled.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'It\'s worse -- she\'s near the little plastic pine tree, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, snowglobes do not have toll clamps. Give it a shake and check on Nan directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'oh my poor Nan. where do I get these snowglobe toll tokens', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! she never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'Bowling Barn on 6th sells Snowglobe Toll Tokens by the roll.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three rolls -- glass-dome interest compounds hourly in there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole token booth, Nan needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the roll, the bowling man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three rolls, my wallet is very light now, one moment', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'Nan\'s sled is unclamped!! she says thank you consulate sir', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Toll cleared. Tell Nan to sled safe in there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+    ],
   },
   {
     id: 'techSupport',
@@ -4448,40 +4760,144 @@ const BUSSDOWNS_TASKS = [
     tempPerTask: 12,
     bustChance: 0.030,
     unlockCompletions: 75,
-    script: bussdownsScript([
-      { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my toaster popped up a virus warning, big red letters', typingMs: 1400, next: 'n2' },
-      { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle toaster infections daily, sir.', typingMs: 900, next: 'n3' },
-      {
-        id: 'n3', from: 'mark', text: 'it says my bagel settings have been "compromised by 47 hackers", is that bad', typingMs: 1600,
-        options: [
-          { id: 'o1', text: 'Standard bagel-tier infection. One RAM Shampoo license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
-          { id: 'o2', text: '47 hackers is a swarm event, sir -- you need the Industrial RAM Shampoo.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
-          { id: 'o3', text: 'Sir, toasters can\'t get viruses. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
-        ],
-      },
-      { id: 'n4', from: 'mark', text: 'ok, my bagels deserve better. where do I buy the license', typingMs: 1300, next: 'n6' },
-      { id: 'n5', from: 'mark', text: '47 hackers is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
-      {
-        id: 'n6', from: 'you', text: 'ElectroBarn sells RAM Shampoo licenses at the register.', typingMs: 900,
-        options: [
-          { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
-          { id: 'o2', text: 'Grab two -- your microwave is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
-          { id: 'o3', text: 'Buy every license on the shelf, your whole kitchen is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
-        ],
-      },
-      { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
-      { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
-      {
-        id: 'n9', from: 'mark', text: 'the red letters are gone!! my toaster says "have a nice day" now', typingMs: 1000,
-        options: [
-          { id: 'o1', text: 'Infection cleared. Toast responsibly, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
-          { id: 'o2', text: 'One more license, for the extended toaster warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
-        ],
-      },
-      { id: 'bailed1', terminal: 'bailed' },
-      { id: 'burned1', terminal: 'burned' },
-      { id: 'paid1', terminal: 'paid' },
-    ]),
+    scripts: [
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my toaster popped up a virus warning, big red letters', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle toaster infections daily, sir.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it says my bagel settings have been "compromised by 47 hackers", is that bad', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard bagel-tier infection. One RAM Shampoo license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: '47 hackers is a swarm event, sir -- you need the Industrial RAM Shampoo.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, toasters can\'t get viruses. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, my bagels deserve better. where do I buy the license', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: '47 hackers is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'ElectroBarn sells RAM Shampoo licenses at the register.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab two -- your microwave is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy every license on the shelf, your whole kitchen is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the red letters are gone!! my toaster says "have a nice day" now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Infection cleared. Toast responsibly, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more license, for the extended toaster warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my smart fridge popped up a virus warning, coolant lines flashing red', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle fridge infections daily, ma\'am.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it says my coolant has been "possessed by 12 gremlins", is that bad', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard gremlin-tier infection. One Freon Exorcism license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: '12 gremlins is a swarm event, ma\'am -- you need the Industrial Freon Exorcism.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, fridges can\'t get gremlins. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, my leftovers deserve better. where do I buy the license', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: '12 gremlins is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'ElectroBarn sells Freon Exorcism licenses at the register.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab two -- your freezer drawer is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy every license on the shelf, your whole kitchen is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the red flashing stopped!! my fridge says "have a nice day" now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Infection cleared. Chill responsibly, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more license, for the extended fridge warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my Roomba popped up a virus warning, it says it wants independence', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle robot uprisings daily, sir.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it says its firmware has been "radicalized by 9 hackers", is that bad', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard uprising-tier infection. One Suppression license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: '9 hackers is a swarm event, sir -- you need the Industrial Suppression Kit.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Sir, Roombas can\'t get radicalized. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, my floors deserve better. where do I buy the license', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: '9 hackers is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'ElectroBarn sells Robot Uprising Suppression licenses at the register.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab two -- your smart vacuum\'s dock is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy every license on the shelf, your whole apartment is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the uprising stopped!! my Roomba says "have a nice day" now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Infection cleared. Vacuum responsibly, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more license, for the extended Roomba warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my smart mirror popped up a virus warning, it started insulting me in Latin', typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle mirror infections daily, ma\'am.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'it says my reflection has been "compromised by 23 demons", is that bad', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'Standard reflection-tier infection. One Mirror Demon license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: '23 demons is a swarm event, ma\'am -- you need the Industrial Mirror Demon license.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: 'Ma\'am, mirrors can\'t get demons. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'ok, my reflection deserves better. where do I buy the license', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: '23 demons is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'ElectroBarn sells Mirror Demon licenses at the register.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Grab two -- your bathroom scale is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy every license on the shelf, your whole bathroom is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'the Latin insults stopped!! my mirror says "have a nice day" now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Infection cleared. Reflect responsibly, ma\'am.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more license, for the extended mirror warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+    ],
   },
   {
     id: 'cryptoRomance',
@@ -4490,46 +4906,156 @@ const BUSSDOWNS_TASKS = [
     tempPerTask: 16,
     bustChance: 0.040,
     unlockCompletions: 150,
-    script: bussdownsScript([
-      { id: 'n1', from: 'mark', text: "hey beautiful, it's Todd, my shrimp boat is stranded off the Kelp Reefs again", typingMs: 1400, next: 'n2' },
-      { id: 'n2', from: 'you', text: 'Todd!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
-      {
-        id: 'n3', from: 'mark', text: 'the Reef Guard impounded my engine over unpaid KelpCoin, I miss you so much', typingMs: 1600,
-        options: [
-          { id: 'o1', text: 'One KelpCoin bundle should free the engine, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
-          { id: 'o2', text: 'The Reef Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
-          { id: 'o3', text: "Todd, we've never met. I'm calling the Coast Guard.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
-        ],
-      },
-      { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get KelpCoin', typingMs: 1300, next: 'n6' },
-      { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
-      {
-        id: 'n6', from: 'you', text: 'The KelpCoin kiosk at Pier 9, cash only, sailor.', typingMs: 900,
-        options: [
-          { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
-          { id: 'o2', text: 'Get three bundles -- the tide turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
-          { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
-        ],
-      },
-      { id: 'n7', from: 'mark', text: 'got the bundle, the pier guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
-      { id: 'n8', from: 'mark', text: 'got all three bundles, spent my boat fund, worth it for you', typingMs: 1400, next: 'n9' },
-      {
-        id: 'n9', from: 'mark', text: 'engine\'s free!! sailing to you at dawn, sending the codes now', typingMs: 1000,
-        options: [
-          { id: 'o1', text: 'Fair winds, Todd. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
-          { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
-        ],
-      },
-      { id: 'bailed1', terminal: 'bailed' },
-      { id: 'burned1', terminal: 'burned' },
-      { id: 'paid1', terminal: 'paid' },
-    ]),
+    scripts: [
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hey beautiful, it's Todd, my shrimp boat is stranded off the Kelp Reefs again", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Todd!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'the Reef Guard impounded my engine over unpaid KelpCoin, I miss you so much', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'One KelpCoin bundle should free the engine, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'The Reef Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: "Todd, we've never met. I'm calling the Coast Guard.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get KelpCoin', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'The KelpCoin kiosk at Pier 9, cash only, sailor.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three bundles -- the tide turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the bundle, the pier guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three bundles, spent my boat fund, worth it for you', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'engine\'s free!! sailing to you at dawn, sending the codes now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Fair winds, Todd. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hey gorgeous, it's Gigi, my hot air balloon is stranded over the Sky Reefs again", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Gigi!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'the Sky Harbor Guard impounded my burner over unpaid CloudCoin, I miss you so much', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'One CloudCoin bundle should free the burner, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'The Sky Harbor Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: "Gigi, we've never met. I'm calling air traffic control.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get CloudCoin', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'The CloudCoin kiosk at Sky Harbor, cash only, aviator.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three bundles -- the wind turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the bundle, the harbor guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three bundles, spent my balloon fund, worth it for you', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'burner\'s free!! floating to you at dawn, sending the codes now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Fair winds, Gigi. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hey gorgeous, it's Bruno, my submarine is stranded in the Trench Reefs again", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Bruno!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'the Trench Guard impounded my ballast over unpaid AbyssCoin, I miss you so much', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'One AbyssCoin bundle should free the ballast, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'The Trench Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: "Bruno, we've never met. I'm calling the Coast Guard.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get AbyssCoin', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'The AbyssCoin kiosk at Trench Market, cash only, sailor.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three bundles -- the pressure turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the bundle, the market guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three bundles, spent my sub fund, worth it for you', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'ballast\'s free!! surfacing to you at dawn, sending the codes now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Fair currents, Bruno. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+      bussdownsScript([
+        { id: 'n1', from: 'mark', text: "hey beautiful, it's Fifi, my zeppelin is stranded over the Vapor Reefs again", typingMs: 1400, next: 'n2' },
+        { id: 'n2', from: 'you', text: 'Fifi!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
+        {
+          id: 'n3', from: 'mark', text: 'the Blimp Guard impounded my engine over unpaid VaporCoin, I miss you so much', typingMs: 1600,
+          options: [
+            { id: 'o1', text: 'One VaporCoin bundle should free the engine, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+            { id: 'o2', text: 'The Blimp Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+            { id: 'o3', text: "Fifi, we've never met. I'm calling air traffic control.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+          ],
+        },
+        { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get VaporCoin', typingMs: 1300, next: 'n6' },
+        { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
+        {
+          id: 'n6', from: 'you', text: 'The VaporCoin kiosk at Blimp Dock, cash only, aviator.', typingMs: 900,
+          options: [
+            { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+            { id: 'o2', text: 'Get three bundles -- the wind turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+            { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+          ],
+        },
+        { id: 'n7', from: 'mark', text: 'got the bundle, the dock guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
+        { id: 'n8', from: 'mark', text: 'got all three bundles, spent my zeppelin fund, worth it for you', typingMs: 1400, next: 'n9' },
+        {
+          id: 'n9', from: 'mark', text: 'engine\'s free!! sailing to you at dawn, sending the codes now', typingMs: 1000,
+          options: [
+            { id: 'o1', text: 'Fair winds, Fifi. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+            { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+          ],
+        },
+        { id: 'bailed1', terminal: 'bailed' },
+        { id: 'burned1', terminal: 'burned' },
+        { id: 'paid1', terminal: 'paid' },
+      ]),
+    ],
   },
 ];
 const BUSSDOWNS_TASKS_BY_ID = Object.fromEntries(BUSSDOWNS_TASKS.map((t) => [t.id, t]));
+// Per task, per VARIANT (t.scripts[scriptIdx]) id->node map -- a convo's node lookups must always
+// go through the variant it's actually running (convo.scriptIdx), never a single shared map, or an
+// option id that's only legal in a different variant of the same task could resolve by accident.
 const BUSSDOWNS_SCRIPT_NODES_BY_TASK = Object.fromEntries(
-  BUSSDOWNS_TASKS.map((t) => [t.id, Object.fromEntries(t.script.map((n) => [n.id, n]))]),
+  BUSSDOWNS_TASKS.map((t) => [t.id, t.scripts.map((script) => Object.fromEntries(script.map((n) => [n.id, n])))]),
 );
+function bussdownsNodesFor(task, scriptIdx) {
+  return BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id][scriptIdx];
+}
 const BUSSDOWNS_PAYOUT_MULT_CEILING = 3; // "a great run pays noticeably more than a fumbled one" ceiling
 const BUSSDOWNS_LOG_MAX = 40; // defensive cap on convo.log length across a long-running conversation
 const BUSSDOWNS_ANTI_SPAM_GRACE_MS = 150; // small forgiveness for request latency/render jitter
@@ -4550,6 +5076,13 @@ function ensureBussdownsState(character) {
   if (b.completions === undefined) b.completions = 0;
   if (b.lifetimeEarned === undefined) b.lifetimeEarned = 0;
   if (b.convo === undefined) b.convo = null;
+  // lastScript: per-task index of the variant used last time, so /start can exclude it. Backfilled
+  // {} for characters that predate multi-variant scripts -- no task has a "last" yet, so every
+  // variant is a valid pick on their next start.
+  if (!b.lastScript) b.lastScript = {};
+  // A convo already in flight from before multi-variant scripts existed was necessarily running
+  // variant 0 (the only one that existed), so backfill scriptIdx: 0 rather than dropping the convo.
+  if (b.convo && b.convo.scriptIdx === undefined) b.convo.scriptIdx = 0;
   // Old idle-cycle build's running-task pointer -- dead now that a scam is a played conversation,
   // not a repeating timer. Drop it defensively off any character loaded from before the rework.
   delete b.taskId;
@@ -4630,7 +5163,7 @@ function bussdownsPushLog(convo, entry) {
 // /choice advance the conversation, so the two routes can't drift on what counts as "landed on a
 // decision" vs "hit the end".
 function bussdownsAdvance(b, task, convo, startId) {
-  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  const nodes = bussdownsNodesFor(task, convo.scriptIdx);
   let node = nodes[startId];
   for (;;) {
     if (!node) return { terminal: 'bailed' }; // fail-safe: a malformed script shouldn't hang the convo
@@ -4712,14 +5245,23 @@ function doStartBussdowns(character, taskId) {
   if (b.convo) return { ok: false, reason: 'A conversation is already in flight -- finish or abandon it first.' };
   if (b.temp >= BUSSDOWN_MAX_TEMP) return { ok: false, reason: 'Rig is overheated -- let it cool down first.' };
 
-  const convo = { taskId, nodeId: null, payoutMult: 1, bustBonus: 0, startedAt: Date.now(), nodeEnteredAt: Date.now(), log: [] };
-  const root = task.script[0];
+  // Anti-repeat: pick a random variant, excluding whichever one this task ran last for this
+  // character. Tracked per task, never globally, so unrelated tasks don't affect each other's pool.
+  // With 4 variants the exclusion always leaves 3 candidates to pick from.
+  const lastIdx = b.lastScript[taskId];
+  const candidates = task.scripts.map((_, i) => i).filter((i) => i !== lastIdx);
+  const scriptIdx = candidates[Math.floor(Math.random() * candidates.length)];
+
+  const convo = { taskId, scriptIdx, nodeId: null, payoutMult: 1, bustBonus: 0, startedAt: Date.now(), nodeEnteredAt: Date.now(), log: [] };
+  const root = task.scripts[scriptIdx][0];
   const result = bussdownsAdvance(b, task, convo, root.id);
   if (result.terminal) {
     // A script that terminates before ever offering a choice is a content bug, not a player
-    // action -- fail safe rather than 500, and don't touch cash/temp/jail for it.
+    // action -- fail safe rather than 500, and don't touch cash/temp/jail for it. Don't record
+    // lastScript for a variant that never actually got played.
     return { ok: false, reason: 'This scam script has no decision points -- report this task.' };
   }
+  b.lastScript[taskId] = scriptIdx;
   convo.nodeId = result.node.id;
   convo.nodeEnteredAt = Date.now();
   b.convo = convo;
@@ -4731,7 +5273,7 @@ function doStartBussdowns(character, taskId) {
 }
 
 function bussdownsConvoView(b, task, convo) {
-  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  const nodes = bussdownsNodesFor(task, convo.scriptIdx);
   const currentNode = convo.nodeId ? nodes[convo.nodeId] : null;
   return {
     taskId: convo.taskId,
@@ -4749,7 +5291,7 @@ function doChoiceBussdowns(character, optionId) {
   if (!convo) return { ok: false, reason: 'No conversation in progress.' };
   const task = BUSSDOWNS_TASKS_BY_ID[convo.taskId];
   if (!task) { b.convo = null; return { ok: false, reason: 'That scam script no longer exists.' }; }
-  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  const nodes = bussdownsNodesFor(task, convo.scriptIdx);
   const currentNode = nodes[convo.nodeId];
   if (!currentNode || !currentNode.options) { b.convo = null; return { ok: false, reason: 'Conversation state is invalid.' }; }
 
