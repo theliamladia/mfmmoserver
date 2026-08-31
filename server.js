@@ -287,6 +287,15 @@ const {
   doDepositColdStorage,
   doWithdrawColdStorage,
   doBuyColdStorageUpgrade,
+  ensureBussdownsState,
+  advanceBussdowns,
+  doStartBussdowns,
+  doStopBussdowns,
+  doBuyBussdownsUpgrade,
+  buildBussdownsParts,
+  buildBussdownsTasksView,
+  bussdownsSecondsToOverheat,
+  bussdownsSecondsToIdle,
   ALTCOIN_SUPPLY,
   altcoinPriceAt,
   doMintAltcoin,
@@ -2497,6 +2506,45 @@ app.post('/crypto/cold-storage/withdraw', requireAuth, (req, res) => {
   runAction(req, res, doWithdrawColdStorage, Number(amount));
 });
 app.post('/crypto/cold-storage/upgrade', requireAuth, (req, res) => runAction(req, res, doBuyColdStorageUpgrade));
+
+// ---------- Bussdowns (PC scam rig) ----------
+// GET mutates (the lazy advance can pay out completions that happened since the last poll), same
+// as /farms/state advancing plot timers on read -- so it logs the cash delta and returns the
+// updated `character` itself, since (unlike Farms' plot advance) this lazy tick can move cash.
+app.get('/bussdowns/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  const cashBefore = character.cash;
+  const tick = advanceBussdowns(character, Date.now());
+  const delta = round2(character.cash - cashBefore);
+  if (delta !== 0) {
+    logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'advanceBussdowns', delta, character.cash);
+  }
+  saveCharacter(user.id, character);
+  const b = ensureBussdownsState(character);
+  res.json({
+    ok: true,
+    character,
+    bussdowns: b,
+    parts: buildBussdownsParts(b),
+    tasks: buildBussdownsTasksView(b),
+    secondsToOverheat: bussdownsSecondsToOverheat(b),
+    secondsToIdle: bussdownsSecondsToIdle(b),
+    overheated: tick.overheated,
+    jailed: tick.jailed,
+    tickMessage: tick.message,
+  });
+});
+app.post('/bussdowns/start', requireAuth, (req, res) => {
+  const { taskId } = req.body || {};
+  runAction(req, res, doStartBussdowns, taskId);
+});
+app.post('/bussdowns/stop', requireAuth, (req, res) => runAction(req, res, doStopBussdowns));
+app.post('/bussdowns/upgrade', requireAuth, (req, res) => {
+  const { part } = req.body || {};
+  runAction(req, res, doBuyBussdownsUpgrade, part);
+});
 
 app.post('/jobs/good/apply', requireAuth, (req, res) => {
   const { jobId } = req.body || {};

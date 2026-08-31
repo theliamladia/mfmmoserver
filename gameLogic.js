@@ -1299,6 +1299,10 @@ function newCharacter(firstName, lastName) {
     drugDealer: { unitsSold: 0 },
     farms: { plots: [], securityTier: 0 },
     crypto: { machineTier: 0, ramTier: 0, cpuTier: 0, gpuTier: 0, prestigeLevel: 0, fc: 0, lastCollectedAt: Date.now() },
+    bussdowns: {
+      cpuTier: 0, gpuTier: 0, coolerTier: 0, temp: BUSSDOWN_IDLE_TEMP,
+      taskId: null, startedAt: null, lastTickAt: Date.now(), completions: 0, lifetimeEarned: 0,
+    },
     crimeRecord: { streak: 0 },
     slime: { active: false, until: 0, byName: null },
     slimeRecord: [],
@@ -4060,6 +4064,277 @@ function tryDrainCryptoWallet(attacker, target) {
   return `You also cracked their wallet and drained ${drained.toFixed(2)} FC!`;
 }
 
+// ---------- Bussdowns (PC scam rig) ----------
+// A player-owned scam PC, available from character creation (no purchase/unlock gate like Farms).
+// The whole point is CONTINUOUS automation: queue a fraud task once and it completes over and over
+// -- one click to start, one click to stop -- unlike the click-per-cycle Farms model. Every
+// completion pays cash and raises PC TEMPERATURE; at 100C the rig auto-stops (OVERHEATS). Temp only
+// falls in real time while stopped, so overheating is the deliberate ceiling on idle/offline
+// earning -- there is intentionally no separate offline-progress cap layered on top of it.
+const BUSSDOWN_MAX_TEMP = 100;
+const BUSSDOWN_IDLE_TEMP = 20;
+const BUSSDOWN_JAIL_YEARS = 2; // base sentence for a busted fraud task, before crimeRecord.streak
+// Cools from a full 100C down to the 20C idle floor in exactly 10 real minutes once stopped,
+// regardless of installed Cooling tier -- Cooling's job is temp-per-task while RUNNING (see
+// BUSSDOWNS_COOLER_TIERS), the idle cool-down rate is a fixed constant so each part ladder stays
+// single-purpose instead of two tracks both fighting over the same number.
+const BUSSDOWN_COOL_RATE_PER_MS = (BUSSDOWN_MAX_TEMP - BUSSDOWN_IDLE_TEMP) / (10 * 60 * 1000);
+
+// Three tiered part ladders (costs deliberately steep -- this is a money sink, same spirit as
+// Farms' plot cost). Tier 0 in every ladder is the free starting part. CPU/GPU each cut task
+// DURATION multiplicatively (mult compounds down the ladder, same shape as the crypto machine-
+// scaling helpers above); Cooling cuts TEMP GAINED PER TASK the same way.
+const BUSSDOWNS_CPU_TIERS = [
+  { name: 'Intel Celeron', cost: 0, mult: 1 },
+  { name: 'Intel i3', cost: 75000, mult: 0.85 },
+  { name: 'Intel i5', cost: 300000, mult: 0.85 },
+  { name: 'Intel i7', cost: 900000, mult: 0.85 },
+  { name: 'Intel i9', cost: 2500000, mult: 0.85 },
+  { name: 'AMD Threadripper', cost: 6000000, mult: 0.85 },
+];
+const BUSSDOWNS_GPU_TIERS = [
+  { name: 'GTX 980', cost: 0, mult: 1 },
+  { name: 'GTX 1080', cost: 60000, mult: 0.85 },
+  { name: 'RTX 2080', cost: 250000, mult: 0.85 },
+  { name: 'RTX 3090', cost: 800000, mult: 0.85 },
+  { name: 'RTX 4090', cost: 2200000, mult: 0.85 },
+];
+const BUSSDOWNS_COOLER_TIERS = [
+  { name: 'Stock Fan', cost: 0, mult: 1 },
+  { name: 'Tower Cooler', cost: 40000, mult: 0.8 },
+  { name: 'AIO 240', cost: 150000, mult: 0.8 },
+  { name: 'AIO 360', cost: 500000, mult: 0.8 },
+  { name: 'Custom Loop', cost: 1500000, mult: 0.8 },
+  { name: 'LN2 Pot', cost: 4000000, mult: 0.8 },
+];
+const BUSSDOWNS_PART_TIERS = { cpu: BUSSDOWNS_CPU_TIERS, gpu: BUSSDOWNS_GPU_TIERS, cooler: BUSSDOWNS_COOLER_TIERS };
+
+// Task catalog (TUNABLE). unlockCompletions gates on lifetime `completions`, same shape Farms uses
+// unitsSold for its own unlock gate.
+const BUSSDOWNS_TASKS = [
+  { id: 'amazonDna', name: 'AMAZON DNA', baseDurationMs: 90 * 1000, payout: 1200, tempPerTask: 7, bustChance: 0.015, unlockCompletions: 0 },
+  { id: 'elderScam', name: 'ELDER SCAM', baseDurationMs: 120 * 1000, payout: 2100, tempPerTask: 9, bustChance: 0.025, unlockCompletions: 25 },
+  { id: 'giftCard', name: 'GIFT CARD DRAIN', baseDurationMs: 60 * 1000, payout: 800, tempPerTask: 5, bustChance: 0.010, unlockCompletions: 0 },
+  { id: 'techSupport', name: 'TECH SUPPORT', baseDurationMs: 150 * 1000, payout: 3000, tempPerTask: 12, bustChance: 0.030, unlockCompletions: 75 },
+  { id: 'cryptoRomance', name: 'CRYPTO ROMANCE', baseDurationMs: 240 * 1000, payout: 5500, tempPerTask: 16, bustChance: 0.040, unlockCompletions: 150 },
+];
+const BUSSDOWNS_TASKS_BY_ID = Object.fromEntries(BUSSDOWNS_TASKS.map((t) => [t.id, t]));
+
+function ensureBussdownsState(character) {
+  if (!character.bussdowns) {
+    character.bussdowns = {
+      cpuTier: 0, gpuTier: 0, coolerTier: 0, temp: BUSSDOWN_IDLE_TEMP,
+      taskId: null, startedAt: null, lastTickAt: Date.now(), completions: 0, lifetimeEarned: 0,
+    };
+  }
+  const b = character.bussdowns;
+  if (b.cpuTier === undefined) b.cpuTier = 0;
+  if (b.gpuTier === undefined) b.gpuTier = 0;
+  if (b.coolerTier === undefined) b.coolerTier = 0;
+  if (b.temp === undefined) b.temp = BUSSDOWN_IDLE_TEMP;
+  if (b.taskId === undefined) b.taskId = null;
+  if (b.startedAt === undefined) b.startedAt = null;
+  if (b.lastTickAt === undefined) b.lastTickAt = Date.now();
+  if (b.completions === undefined) b.completions = 0;
+  if (b.lifetimeEarned === undefined) b.lifetimeEarned = 0;
+  return b;
+}
+
+function bussdownsDurationMult(b) {
+  const cpuMult = BUSSDOWNS_CPU_TIERS.slice(1, b.cpuTier + 1).reduce((m, t) => m * t.mult, 1);
+  const gpuMult = BUSSDOWNS_GPU_TIERS.slice(1, b.gpuTier + 1).reduce((m, t) => m * t.mult, 1);
+  return cpuMult * gpuMult;
+}
+
+function bussdownsCoolerMult(b) {
+  return BUSSDOWNS_COOLER_TIERS.slice(1, b.coolerTier + 1).reduce((m, t) => m * t.mult, 1);
+}
+
+function bussdownsTaskDuration(b, task) {
+  return Math.max(1000, Math.round(task.baseDurationMs * bussdownsDurationMult(b)));
+}
+
+function bussdownsTaskTemp(b, task) {
+  return round2(task.tempPerTask * bussdownsCoolerMult(b));
+}
+
+function bussdownsNextTierView(tiers, tier) {
+  if (tier + 1 >= tiers.length) return null;
+  const next = tiers[tier + 1];
+  return { name: next.name, cost: next.cost };
+}
+
+function buildBussdownsParts(b) {
+  return {
+    cpu: { tier: b.cpuTier, name: BUSSDOWNS_CPU_TIERS[b.cpuTier].name, next: bussdownsNextTierView(BUSSDOWNS_CPU_TIERS, b.cpuTier) },
+    gpu: { tier: b.gpuTier, name: BUSSDOWNS_GPU_TIERS[b.gpuTier].name, next: bussdownsNextTierView(BUSSDOWNS_GPU_TIERS, b.gpuTier) },
+    cooler: { tier: b.coolerTier, name: BUSSDOWNS_COOLER_TIERS[b.coolerTier].name, next: bussdownsNextTierView(BUSSDOWNS_COOLER_TIERS, b.coolerTier) },
+  };
+}
+
+function buildBussdownsTasksView(b) {
+  return BUSSDOWNS_TASKS.map((t) => ({
+    id: t.id,
+    name: t.name,
+    payout: t.payout,
+    bustChance: t.bustChance,
+    unlockCompletions: t.unlockCompletions,
+    unlocked: b.completions >= t.unlockCompletions,
+    durationMs: bussdownsTaskDuration(b, t),
+    tempPerTask: bussdownsTaskTemp(b, t),
+  }));
+}
+
+function bussdownsSecondsToOverheat(b) {
+  if (!b.taskId) return null;
+  const task = BUSSDOWNS_TASKS_BY_ID[b.taskId];
+  if (!task) return null;
+  const tempPerTask = bussdownsTaskTemp(b, task);
+  const durationMs = bussdownsTaskDuration(b, task);
+  if (tempPerTask <= 0) return null;
+  const cyclesLeft = Math.max(0, Math.ceil((BUSSDOWN_MAX_TEMP - b.temp) / tempPerTask));
+  const elapsedInCycle = Math.max(0, Date.now() - b.startedAt);
+  const msLeftInCurrentCycle = Math.max(0, durationMs - elapsedInCycle);
+  const totalMs = cyclesLeft <= 0 ? 0 : msLeftInCurrentCycle + (cyclesLeft - 1) * durationMs;
+  return Math.max(0, Math.round(totalMs / 1000));
+}
+
+function bussdownsSecondsToIdle(b) {
+  if (b.taskId) return 0;
+  if (b.temp <= BUSSDOWN_IDLE_TEMP) return 0;
+  return Math.round(((b.temp - BUSSDOWN_IDLE_TEMP) / BUSSDOWN_COOL_RATE_PER_MS) / 1000);
+}
+
+// Lazy tick, exactly like advanceFarmPlot -- pure function of elapsed wall-clock time, called by
+// every bussdowns route before it acts (and by the state route) instead of running a real
+// background job. Returns what happened this tick so callers can surface a message/jail redirect.
+function advanceBussdowns(character, now) {
+  const b = ensureBussdownsState(character);
+
+  if (b.taskId) {
+    const task = BUSSDOWNS_TASKS_BY_ID[b.taskId];
+    if (!task) {
+      // Catalog entry vanished from under a running task (shouldn't happen outside dev/testing) --
+      // fail safe by just stopping the rig rather than throwing.
+      b.taskId = null;
+      b.startedAt = null;
+      b.lastTickAt = now;
+      return { overheated: false, jailed: false, message: null };
+    }
+    const durationMs = bussdownsTaskDuration(b, task);
+    const tempPerTask = bussdownsTaskTemp(b, task);
+    const elapsed = Math.max(0, now - b.startedAt);
+    const cyclesAvailable = Math.floor(elapsed / durationMs);
+    // Cap by how many cycles it takes to hit the ceiling from the CURRENT temp -- computed once up
+    // front (tempPerTask doesn't change mid-loop) so a huge rewind can't run more completions than
+    // physically fit before 100C.
+    const roomToCeiling = Math.max(0, BUSSDOWN_MAX_TEMP - b.temp);
+    const cyclesToOverheat = tempPerTask > 0 ? Math.ceil(roomToCeiling / tempPerTask) : Infinity;
+
+    let cyclesRun = 0;
+    let earned = 0;
+    let jailed = false;
+    for (let i = 0; i < cyclesAvailable; i += 1) {
+      if (cyclesRun >= cyclesToOverheat) break;
+      cyclesRun += 1;
+      earned += task.payout;
+      b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempPerTask));
+      b.completions += 1;
+      if (Math.random() < task.bustChance) {
+        jailed = true;
+        break;
+      }
+    }
+    if (earned > 0) {
+      character.cash = round2(character.cash + earned);
+      b.lifetimeEarned = round2(b.lifetimeEarned + earned);
+    }
+    // Partial progress toward the next cycle survives: startedAt only advances by whole cycles
+    // actually run, never dropping the elapsed remainder.
+    b.startedAt += cyclesRun * durationMs;
+
+    if (jailed) {
+      b.taskId = null;
+      b.startedAt = null;
+      const years = BUSSDOWN_JAIL_YEARS + character.crimeRecord.streak;
+      character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
+      character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+      character.jail.inJail = true;
+      character.jail.crime = task.name;
+      character.jail.yearsRemaining = years;
+      character.jail.serving = false;
+      const seized = applyArrestSeizure(character);
+      const streakNote = years > BUSSDOWN_JAIL_YEARS ? ` Repeat offender: +${years - BUSSDOWN_JAIL_YEARS} year(s) added to your usual sentence.` : '';
+      b.lastTickAt = now;
+      return {
+        overheated: false,
+        jailed: true,
+        message: `Busted running ${task.name}! Sentenced to ${years} year(s).${streakNote}${arrestSeizureNote(seized)}`,
+      };
+    }
+    if (b.temp >= BUSSDOWN_MAX_TEMP) {
+      b.taskId = null;
+      b.startedAt = null;
+      b.lastTickAt = now;
+      return { overheated: true, jailed: false, message: 'The rig overheated at 100C and shut itself down.' };
+    }
+    b.lastTickAt = now;
+    return { overheated: false, jailed: false, message: null };
+  }
+
+  // Stopped: temperature falls in real time only, floored at the idle temp.
+  const elapsed = Math.max(0, now - b.lastTickAt);
+  b.temp = Math.max(BUSSDOWN_IDLE_TEMP, round2(b.temp - elapsed * BUSSDOWN_COOL_RATE_PER_MS));
+  b.lastTickAt = now;
+  return { overheated: false, jailed: false, message: null };
+}
+
+function doStartBussdowns(character, taskId) {
+  const b = ensureBussdownsState(character);
+  const tick = advanceBussdowns(character, Date.now());
+  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
+  if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
+  if (character.alliance < GUZMAN_MIN_ALLIANCE) return { ok: false, reason: 'Bussdowns requires Bad alliance standing.' };
+  const task = BUSSDOWNS_TASKS_BY_ID[taskId];
+  if (!task) return { ok: false, reason: 'Unknown task.' };
+  if (b.completions < task.unlockCompletions) return { ok: false, reason: `Unlocks after ${task.unlockCompletions} lifetime completions.` };
+  if (b.taskId) return { ok: false, reason: 'A task is already running -- stop it first.' };
+  if (b.temp >= BUSSDOWN_MAX_TEMP) return { ok: false, reason: 'Rig is overheated -- let it cool down first.' };
+  b.taskId = taskId;
+  b.startedAt = Date.now();
+  const overheatNote = tick.overheated ? ` ${tick.message}` : '';
+  return { ok: true, jailed: false, message: `Started ${task.name}.${overheatNote}`, cls: 'gain', character };
+}
+
+function doStopBussdowns(character) {
+  const b = ensureBussdownsState(character);
+  const tick = advanceBussdowns(character, Date.now());
+  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
+  if (tick.overheated) return { ok: true, jailed: false, message: tick.message, cls: 'loss', character };
+  if (!b.taskId) return { ok: false, reason: 'Nothing is running.' };
+  b.taskId = null;
+  b.startedAt = null;
+  return { ok: true, jailed: false, message: 'Rig stopped.', cls: '', character };
+}
+
+function doBuyBussdownsUpgrade(character, part) {
+  const tiers = BUSSDOWNS_PART_TIERS[part];
+  if (!tiers) return { ok: false, reason: 'Unknown part.' };
+  const b = ensureBussdownsState(character);
+  const tick = advanceBussdowns(character, Date.now());
+  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
+  if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
+  if (character.alliance < GUZMAN_MIN_ALLIANCE) return { ok: false, reason: 'Bussdowns requires Bad alliance standing.' };
+  const tierKey = `${part}Tier`;
+  if (b[tierKey] + 1 >= tiers.length) return { ok: false, reason: 'Already maxed out.' };
+  const next = tiers[b[tierKey] + 1];
+  if (character.cash < next.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - next.cost);
+  b[tierKey] += 1;
+  const overheatNote = tick.overheated ? ` ${tick.message}` : '';
+  return { ok: true, jailed: false, message: `Installed ${next.name}.${overheatNote}`, cls: 'gain', character };
+}
+
 // ---------- Drugs & Rugs: Altcoins (rug-pull system) ----------
 // Rows live in a real shared DB table (altcoins.js in db.js), same reasoning as mtn_listings --
 // visible to every player, not just the creator. These are the pure math helpers gameLogic.js can
@@ -4703,6 +4978,21 @@ module.exports = {
   CRYPTO_MACHINES,
   CRYPTO_UPGRADE_TIERS,
   FC_START_PRICE,
+  ensureBussdownsState,
+  advanceBussdowns,
+  doStartBussdowns,
+  doStopBussdowns,
+  doBuyBussdownsUpgrade,
+  buildBussdownsParts,
+  buildBussdownsTasksView,
+  bussdownsSecondsToOverheat,
+  bussdownsSecondsToIdle,
+  BUSSDOWNS_TASKS,
+  BUSSDOWNS_CPU_TIERS,
+  BUSSDOWNS_GPU_TIERS,
+  BUSSDOWNS_COOLER_TIERS,
+  BUSSDOWN_MAX_TEMP,
+  BUSSDOWN_IDLE_TEMP,
   ALTCOIN_MINT_COST_FC,
   ALTCOIN_SUPPLY,
   ALTCOIN_START_PRICE,
