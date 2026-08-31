@@ -4281,21 +4281,264 @@ const BUSSDOWNS_COOLER_TIERS = [
 const BUSSDOWNS_PART_TIERS = { cpu: BUSSDOWNS_CPU_TIERS, gpu: BUSSDOWNS_GPU_TIERS, cooler: BUSSDOWNS_COOLER_TIERS };
 
 // Task catalog (TUNABLE). unlockCompletions gates on lifetime `completions`, same shape Farms uses
-// unitsSold for its own unlock gate.
+// unitsSold for its own unlock gate. Heat and bust chance are unchanged from the old idle build;
+// only the payout numbers moved (roughly 6x, since a conversation is ~30-60s of real clicking
+// instead of a passive timer) and `baseDurationMs` was dropped in favor of `script` (see below).
+//
+// Each script is an ordered graph of NODES, keyed by id:
+//   { id, from: 'mark'|'you', text, typingMs, options?: [...], next?: nodeId }
+//   { id, terminal: 'paid' | 'bailed' | 'burned' }
+// 'mark' nodes are what the mark sends; 'you' nodes are your character's own connective-tissue
+// lines, sent automatically. A node with `options` is a decision point -- 2-3 chat-bubble replies,
+// each an { id, text, effect } where effect = { payoutMult, heatDelta, bustDelta, next }. Every
+// other non-terminal node just has `next`, and the server auto-advances through those on the way to
+// the following decision or terminal. `next`/effect.next always point at another id in the SAME
+// script.
+//
+// WRITING GUARDRAIL: every line below has to stay absurdist and obviously fictional -- New Milos
+// City brands, cartoon marks, silly stakes and a made-up currency of the moment (never a real gift
+// card brand, real bank, or a line that would work verbatim against an actual person). This is
+// comedy set dressing for a stat-driven minigame, not a technique reference.
+// Namespaces every option id to its own node (n3's "o1" becomes "n3__o1") -- authored short as
+// o1/o2/o3 for readability, but this keeps every id globally unique across the whole script so an
+// option that's legal at one decision point can never be mistaken for a same-named option at
+// another. /choice only ever checks the CURRENT node's own option list, so this isn't needed for
+// correctness there -- it's what makes "an option belonging to a different node" a real, checkable
+// case at all instead of every node coincidentally sharing the same o1/o2/o3 strings.
+function bussdownsScript(nodes) {
+  nodes.forEach((node) => {
+    if (node.options) {
+      node.options.forEach((opt) => { opt.id = `${node.id}__${opt.id}`; });
+    }
+  });
+  return Object.freeze(nodes);
+}
+
 const BUSSDOWNS_TASKS = [
-  { id: 'amazonDna', name: 'AMAZON DNA', baseDurationMs: 90 * 1000, payout: 1200, tempPerTask: 7, bustChance: 0.015, unlockCompletions: 0 },
-  { id: 'elderScam', name: 'ELDER SCAM', baseDurationMs: 120 * 1000, payout: 2100, tempPerTask: 9, bustChance: 0.025, unlockCompletions: 25 },
-  { id: 'giftCard', name: 'GIFT CARD DRAIN', baseDurationMs: 60 * 1000, payout: 800, tempPerTask: 5, bustChance: 0.010, unlockCompletions: 0 },
-  { id: 'techSupport', name: 'TECH SUPPORT', baseDurationMs: 150 * 1000, payout: 3000, tempPerTask: 12, bustChance: 0.030, unlockCompletions: 75 },
-  { id: 'cryptoRomance', name: 'CRYPTO ROMANCE', baseDurationMs: 240 * 1000, payout: 5500, tempPerTask: 16, bustChance: 0.040, unlockCompletions: 150 },
+  {
+    id: 'giftCard',
+    name: 'GIFT CARD DRAIN',
+    payout: 5000,
+    tempPerTask: 5,
+    bustChance: 0.010,
+    unlockCompletions: 0,
+    script: bussdownsScript([
+      { id: 'n1', from: 'mark', text: "hello?? this is Chip. my walk-in freezer is HAUNTED and only 'GloboMart Frost Wardens' can bind the ghost", typingMs: 1400, next: 'n2' },
+      { id: 'n2', from: 'you', text: 'Sir, this is the Frost Warden hotline, we specialize in exactly this.', typingMs: 900, next: 'n3' },
+      {
+        id: 'n3', from: 'mark', text: 'PLEASE. the ghost keeps rearranging my frozen burritos into a pentagram', typingMs: 1600,
+        options: [
+          { id: 'o1', text: 'One binding voucher should cover it, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+          { id: 'o2', text: 'This ghost sounds Tier-3. You\'ll want the deluxe voucher bundle.', effect: { payoutMult: 1.2, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+          { id: 'o3', text: '...actually sir, call an actual electrician.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+        ],
+      },
+      { id: 'n4', from: 'mark', text: 'ok!! ok, standard binding. where do I get the voucher', typingMs: 1300, next: 'n6' },
+      { id: 'n5', from: 'mark', text: 'deluxe?? oh no it\'s that serious. tell me everything', typingMs: 1300, next: 'n6' },
+      {
+        id: 'n6', from: 'you', text: 'GloboMart, the "Frost Warden Voucher" endcap by the seasonal candles.', typingMs: 900,
+        options: [
+          { id: 'o1', text: 'One voucher, read me the code when you\'re back.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+          { id: 'o2', text: 'Grab three, ghosts travel in packs this time of year.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+          { id: 'o3', text: 'Actually, grab TEN. It\'s a whole coven.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+        ],
+      },
+      { id: 'n7', from: 'mark', text: 'got it, reading it now, hang on', typingMs: 1100, next: 'n9' },
+      { id: 'n8', from: 'mark', text: 'three vouchers acquired, my arms are full of candles too, hang on', typingMs: 1400, next: 'n9' },
+      {
+        id: 'n9', from: 'mark', text: 'the burritos stopped moving!! sending the codes now, THANK YOU', typingMs: 1000,
+        options: [
+          { id: 'o1', text: 'Ghost bound. Have a haunting-free evening, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+          { id: 'o2', text: 'One more voucher for the warranty, just to be safe.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+        ],
+      },
+      { id: 'bailed1', terminal: 'bailed' },
+      { id: 'burned1', terminal: 'burned' },
+      { id: 'paid1', terminal: 'paid' },
+    ]),
+  },
+  {
+    id: 'amazonDna',
+    name: 'AMAZON DNA',
+    payout: 8000,
+    tempPerTask: 7,
+    bustChance: 0.015,
+    unlockCompletions: 0,
+    script: bussdownsScript([
+      { id: 'n1', from: 'mark', text: 'this is Doug, my AmazoPrime package says "raccoon genome sample -- MISDELIVERED"', typingMs: 1400, next: 'n2' },
+      { id: 'n2', from: 'you', text: 'AmazoPrime Genome Recovery Desk, ticket received, Doug.', typingMs: 900, next: 'n3' },
+      {
+        id: 'n3', from: 'mark', text: 'that raccoon is MY CLONE, Gerald. I need his DNA rerouted to my actual lab, not some stranger\'s garage', typingMs: 1600,
+        options: [
+          { id: 'o1', text: 'Standard reroute fee, one Doubloon Pass covers it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+          { id: 'o2', text: 'Cross-state raccoon-genome reroutes need the Priority Doubloon Pass.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+          { id: 'o3', text: 'Sir, Amazo does not ship clones. This is a produce order.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+        ],
+      },
+      { id: 'n4', from: 'mark', text: 'ok. ok. Gerald deserves to come home. where do I get the pass', typingMs: 1300, next: 'n6' },
+      { id: 'n5', from: 'mark', text: 'priority?! yes, anything for Gerald, walk me through it', typingMs: 1300, next: 'n6' },
+      {
+        id: 'n6', from: 'you', text: 'MoonMart sells the Doubloon Pass at the kiosk by the lobster tank.', typingMs: 900,
+        options: [
+          { id: 'o1', text: 'One pass, read me the redemption code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+          { id: 'o2', text: 'Get two -- Gerald\'s clone tends to travel with a decoy.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+          { id: 'o3', text: 'Actually, buy every pass on the rack, the whole litter is loose.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+        ],
+      },
+      { id: 'n7', from: 'mark', text: 'got the pass, one sec', typingMs: 1100, next: 'n9' },
+      { id: 'n8', from: 'mark', text: 'got both passes, lobster tank guy gave me a weird look but ok', typingMs: 1400, next: 'n9' },
+      {
+        id: 'n9', from: 'mark', text: 'Gerald is en route home. sending you the codes, hero', typingMs: 1000,
+        options: [
+          { id: 'o1', text: 'Reroute confirmed. Godspeed, Gerald.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+          { id: 'o2', text: 'One more pass for Gerald\'s emotional support decoy.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+        ],
+      },
+      { id: 'bailed1', terminal: 'bailed' },
+      { id: 'burned1', terminal: 'burned' },
+      { id: 'paid1', terminal: 'paid' },
+    ]),
+  },
+  {
+    id: 'elderScam',
+    name: 'ELDER SCAM',
+    payout: 15000,
+    tempPerTask: 9,
+    bustChance: 0.025,
+    unlockCompletions: 25,
+    script: bussdownsScript([
+      { id: 'n1', from: 'mark', text: 'oh thank goodness, is this the Lunar Consulate? my grandson Todd is stuck on the moon', typingMs: 1400, next: 'n2' },
+      { id: 'n2', from: 'you', text: 'This is the Lunar Consulate toll office, ma\'am. We have Todd\'s file.', typingMs: 900, next: 'n3' },
+      {
+        id: 'n3', from: 'mark', text: 'he says his moon buggy got booted over unpaid toll tokens, is that even real', typingMs: 1600,
+        options: [
+          { id: 'o1', text: 'Very real, ma\'am. One toll settlement in Arcade Tokens frees the buggy.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+          { id: 'o2', text: 'It\'s worse -- he\'s in the Sea of Tranquility, that\'s the premium toll zone.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+          { id: 'o3', text: 'Ma\'am, the moon does not have toll booths. Call Todd directly.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+        ],
+      },
+      { id: 'n4', from: 'mark', text: 'oh my poor Todd. where do I get these arcade tokens', typingMs: 1300, next: 'n6' },
+      { id: 'n5', from: 'mark', text: 'the PREMIUM zone?! he never tells me anything, ok tell me what to do', typingMs: 1300, next: 'n6' },
+      {
+        id: 'n6', from: 'you', text: 'Skee-Ball Palace on 4th sells Arcade Tokens by the roll.', typingMs: 900,
+        options: [
+          { id: 'o1', text: 'One roll should settle it, read me the roll number.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+          { id: 'o2', text: 'Get three rolls -- moon interest compounds hourly up there.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+          { id: 'o3', text: 'Buy out the whole token booth, Todd needs to come home tonight.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+        ],
+      },
+      { id: 'n7', from: 'mark', text: 'got the roll, the arcade man thinks I\'m having a wonderful evening', typingMs: 1100, next: 'n9' },
+      { id: 'n8', from: 'mark', text: 'got all three rolls, my purse is very light now, one moment', typingMs: 1400, next: 'n9' },
+      {
+        id: 'n9', from: 'mark', text: 'Todd\'s buggy is unbooted!! he says thank you consulate lady', typingMs: 1000,
+        options: [
+          { id: 'o1', text: 'Toll cleared. Tell Todd to drive safe up there.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+          { id: 'o2', text: 'One more roll, for the return-trip toll.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+        ],
+      },
+      { id: 'bailed1', terminal: 'bailed' },
+      { id: 'burned1', terminal: 'burned' },
+      { id: 'paid1', terminal: 'paid' },
+    ]),
+  },
+  {
+    id: 'techSupport',
+    name: 'TECH SUPPORT',
+    payout: 30000,
+    tempPerTask: 12,
+    bustChance: 0.030,
+    unlockCompletions: 75,
+    script: bussdownsScript([
+      { id: 'n1', from: 'mark', text: 'is this Winbugs Support? my toaster popped up a virus warning, big red letters', typingMs: 1400, next: 'n2' },
+      { id: 'n2', from: 'you', text: 'Winbugs Appliance Division, we handle toaster infections daily, sir.', typingMs: 900, next: 'n3' },
+      {
+        id: 'n3', from: 'mark', text: 'it says my bagel settings have been "compromised by 47 hackers", is that bad', typingMs: 1600,
+        options: [
+          { id: 'o1', text: 'Standard bagel-tier infection. One RAM Shampoo license clears it.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+          { id: 'o2', text: '47 hackers is a swarm event, sir -- you need the Industrial RAM Shampoo.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+          { id: 'o3', text: 'Sir, toasters can\'t get viruses. Please unplug it and relax.', effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+        ],
+      },
+      { id: 'n4', from: 'mark', text: 'ok, my bagels deserve better. where do I buy the license', typingMs: 1300, next: 'n6' },
+      { id: 'n5', from: 'mark', text: '47 hackers is a SWARM?! ok tell me exactly what to do', typingMs: 1300, next: 'n6' },
+      {
+        id: 'n6', from: 'you', text: 'ElectroBarn sells RAM Shampoo licenses at the register.', typingMs: 900,
+        options: [
+          { id: 'o1', text: 'One license, read me the activation code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+          { id: 'o2', text: 'Grab two -- your microwave is probably infected too.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+          { id: 'o3', text: 'Buy every license on the shelf, your whole kitchen is compromised.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+        ],
+      },
+      { id: 'n7', from: 'mark', text: 'got the license, hang on', typingMs: 1100, next: 'n9' },
+      { id: 'n8', from: 'mark', text: 'got both licenses, the cashier looked concerned, one sec', typingMs: 1400, next: 'n9' },
+      {
+        id: 'n9', from: 'mark', text: 'the red letters are gone!! my toaster says "have a nice day" now', typingMs: 1000,
+        options: [
+          { id: 'o1', text: 'Infection cleared. Toast responsibly, sir.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+          { id: 'o2', text: 'One more license, for the extended toaster warranty.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+        ],
+      },
+      { id: 'bailed1', terminal: 'bailed' },
+      { id: 'burned1', terminal: 'burned' },
+      { id: 'paid1', terminal: 'paid' },
+    ]),
+  },
+  {
+    id: 'cryptoRomance',
+    name: 'CRYPTO ROMANCE',
+    payout: 60000,
+    tempPerTask: 16,
+    bustChance: 0.040,
+    unlockCompletions: 150,
+    script: bussdownsScript([
+      { id: 'n1', from: 'mark', text: "hey beautiful, it's Todd, my shrimp boat is stranded off the Kelp Reefs again", typingMs: 1400, next: 'n2' },
+      { id: 'n2', from: 'you', text: 'Todd!! Not again. Tell me what happened this time.', typingMs: 900, next: 'n3' },
+      {
+        id: 'n3', from: 'mark', text: 'the Reef Guard impounded my engine over unpaid KelpCoin, I miss you so much', typingMs: 1600,
+        options: [
+          { id: 'o1', text: 'One KelpCoin bundle should free the engine, my love.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n4' } },
+          { id: 'o2', text: 'The Reef Guard doubles fines after dusk -- get the premium bundle now.', effect: { payoutMult: 1.25, heatDelta: 0.4, bustDelta: 0.03, next: 'n5' } },
+          { id: 'o3', text: "Todd, we've never met. I'm calling the Coast Guard.", effect: { payoutMult: 0, heatDelta: 0.2, bustDelta: 0, next: 'bailed1' } },
+        ],
+      },
+      { id: 'n4', from: 'mark', text: 'you\'re my whole horizon. where do I get KelpCoin', typingMs: 1300, next: 'n6' },
+      { id: 'n5', from: 'mark', text: 'doubled?! ok, tell me exactly where to send it, my love', typingMs: 1300, next: 'n6' },
+      {
+        id: 'n6', from: 'you', text: 'The KelpCoin kiosk at Pier 9, cash only, sailor.', typingMs: 900,
+        options: [
+          { id: 'o1', text: 'One bundle, then read me the wallet code.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'n7' } },
+          { id: 'o2', text: 'Get three bundles -- the tide turns against you at midnight.', effect: { payoutMult: 1.3, heatDelta: 0.5, bustDelta: 0.04, next: 'n8' } },
+          { id: 'o3', text: 'Buy out the whole kiosk, our future depends on it.', effect: { payoutMult: 0, heatDelta: 0.6, bustDelta: 0.08, next: 'burned1' } },
+        ],
+      },
+      { id: 'n7', from: 'mark', text: 'got the bundle, the pier guy thinks I\'m in love, which, fair', typingMs: 1100, next: 'n9' },
+      { id: 'n8', from: 'mark', text: 'got all three bundles, spent my boat fund, worth it for you', typingMs: 1400, next: 'n9' },
+      {
+        id: 'n9', from: 'mark', text: 'engine\'s free!! sailing to you at dawn, sending the codes now', typingMs: 1000,
+        options: [
+          { id: 'o1', text: 'Fair winds, Todd. Can\'t wait.', effect: { payoutMult: 1, heatDelta: 0, bustDelta: 0, next: 'paid1' } },
+          { id: 'o2', text: 'One more bundle, for the harbor toll on your way in.', effect: { payoutMult: 0, heatDelta: 0.3, bustDelta: 0.06, next: 'burned1' } },
+        ],
+      },
+      { id: 'bailed1', terminal: 'bailed' },
+      { id: 'burned1', terminal: 'burned' },
+      { id: 'paid1', terminal: 'paid' },
+    ]),
+  },
 ];
 const BUSSDOWNS_TASKS_BY_ID = Object.fromEntries(BUSSDOWNS_TASKS.map((t) => [t.id, t]));
+const BUSSDOWNS_SCRIPT_NODES_BY_TASK = Object.fromEntries(
+  BUSSDOWNS_TASKS.map((t) => [t.id, Object.fromEntries(t.script.map((n) => [n.id, n]))]),
+);
+const BUSSDOWNS_PAYOUT_MULT_CEILING = 3; // "a great run pays noticeably more than a fumbled one" ceiling
+const BUSSDOWNS_LOG_MAX = 40; // defensive cap on convo.log length across a long-running conversation
+const BUSSDOWNS_ANTI_SPAM_GRACE_MS = 150; // small forgiveness for request latency/render jitter
 
 function ensureBussdownsState(character) {
   if (!character.bussdowns) {
     character.bussdowns = {
       cpuTier: 0, gpuTier: 0, coolerTier: 0, temp: BUSSDOWN_IDLE_TEMP,
-      taskId: null, startedAt: null, lastTickAt: Date.now(), completions: 0, lifetimeEarned: 0,
+      lastTickAt: Date.now(), completions: 0, lifetimeEarned: 0, convo: null,
     };
   }
   const b = character.bussdowns;
@@ -4303,11 +4546,14 @@ function ensureBussdownsState(character) {
   if (b.gpuTier === undefined) b.gpuTier = 0;
   if (b.coolerTier === undefined) b.coolerTier = 0;
   if (b.temp === undefined) b.temp = BUSSDOWN_IDLE_TEMP;
-  if (b.taskId === undefined) b.taskId = null;
-  if (b.startedAt === undefined) b.startedAt = null;
   if (b.lastTickAt === undefined) b.lastTickAt = Date.now();
   if (b.completions === undefined) b.completions = 0;
   if (b.lifetimeEarned === undefined) b.lifetimeEarned = 0;
+  if (b.convo === undefined) b.convo = null;
+  // Old idle-cycle build's running-task pointer -- dead now that a scam is a played conversation,
+  // not a repeating timer. Drop it defensively off any character loaded from before the rework.
+  delete b.taskId;
+  delete b.startedAt;
   return b;
 }
 
@@ -4321,8 +4567,12 @@ function bussdownsCoolerMult(b) {
   return BUSSDOWNS_COOLER_TIERS.slice(1, b.coolerTier + 1).reduce((m, t) => m * t.mult, 1);
 }
 
-function bussdownsTaskDuration(b, task) {
-  return Math.max(1000, Math.round(task.baseDurationMs * bussdownsDurationMult(b)));
+// CPU/GPU used to cut the auto-repeat cycle's DURATION; there's no cycle left to time, so the same
+// ladder/mult now cuts how long the chat's typing indicator runs -- a faster rig reads a mark's
+// reply sooner. This is also the anti-spam clock, so a real rig upgrade legitimately lets you click
+// through faster, it isn't just cosmetic.
+function bussdownsScaledTypingMs(b, typingMs) {
+  return Math.max(150, Math.round((typingMs || 0) * bussdownsDurationMult(b)));
 }
 
 function bussdownsTaskTemp(b, task) {
@@ -4351,109 +4601,100 @@ function buildBussdownsTasksView(b) {
     bustChance: t.bustChance,
     unlockCompletions: t.unlockCompletions,
     unlocked: b.completions >= t.unlockCompletions,
-    durationMs: bussdownsTaskDuration(b, t),
     tempPerTask: bussdownsTaskTemp(b, t),
   }));
 }
 
-function bussdownsSecondsToOverheat(b) {
-  if (!b.taskId) return null;
-  const task = BUSSDOWNS_TASKS_BY_ID[b.taskId];
-  if (!task) return null;
-  const tempPerTask = bussdownsTaskTemp(b, task);
-  const durationMs = bussdownsTaskDuration(b, task);
-  if (tempPerTask <= 0) return null;
-  const cyclesLeft = Math.max(0, Math.ceil((BUSSDOWN_MAX_TEMP - b.temp) / tempPerTask));
-  const elapsedInCycle = Math.max(0, Date.now() - b.startedAt);
-  const msLeftInCurrentCycle = Math.max(0, durationMs - elapsedInCycle);
-  const totalMs = cyclesLeft <= 0 ? 0 : msLeftInCurrentCycle + (cyclesLeft - 1) * durationMs;
-  return Math.max(0, Math.round(totalMs / 1000));
-}
-
 function bussdownsSecondsToIdle(b) {
-  if (b.taskId) return 0;
   if (b.temp <= BUSSDOWN_IDLE_TEMP) return 0;
   return Math.round(((b.temp - BUSSDOWN_IDLE_TEMP) / BUSSDOWN_COOL_RATE_PER_MS) / 1000);
 }
 
+// Renders a node for the client: mark/you text plus the (rig-scaled) typing delay, and the option
+// list stripped of `effect` -- the effect is server-internal, the client only needs id/text to
+// render reply buttons.
+function bussdownsRenderNode(b, node) {
+  const view = { id: node.id, from: node.from, text: node.text, typingMs: bussdownsScaledTypingMs(b, node.typingMs) };
+  if (node.options) view.options = node.options.map((o) => ({ id: o.id, text: o.text }));
+  return view;
+}
+
+function bussdownsPushLog(convo, entry) {
+  convo.log.push(entry);
+  if (convo.log.length > BUSSDOWNS_LOG_MAX) convo.log.splice(0, convo.log.length - BUSSDOWNS_LOG_MAX);
+}
+
+// Walks the script from `startId` through every non-decision node (appending each to the
+// transcript), stopping at the first decision point (returned as the new "current" node) or a
+// terminal (returned separately, already off the log). This is the one place both /start and
+// /choice advance the conversation, so the two routes can't drift on what counts as "landed on a
+// decision" vs "hit the end".
+function bussdownsAdvance(b, task, convo, startId) {
+  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  let node = nodes[startId];
+  for (;;) {
+    if (!node) return { terminal: 'bailed' }; // fail-safe: a malformed script shouldn't hang the convo
+    if (node.terminal) return { terminal: node.terminal };
+    bussdownsPushLog(convo, { from: node.from, text: node.text, typingMs: bussdownsScaledTypingMs(b, node.typingMs) });
+    if (node.options) return { node };
+    node = nodes[node.next];
+  }
+}
+
+function bussdownsResolveTerminal(character, b, task, convo, terminal) {
+  b.lastTickAt = Date.now();
+  if (terminal === 'paid') {
+    const mult = Math.max(0.5, Math.min(BUSSDOWNS_PAYOUT_MULT_CEILING, convo.payoutMult));
+    const amount = round2(task.payout * mult);
+    character.cash = round2(character.cash + amount);
+    b.lifetimeEarned = round2(b.lifetimeEarned + amount);
+    b.completions += 1;
+    const tempAdd = bussdownsTaskTemp(b, task);
+    b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempAdd));
+    return {
+      outcome: 'paid', amount, mult: round2(mult), jailed: false,
+      message: `${task.name}: paid $${amount.toLocaleString()}${mult > 1 ? ` (${mult.toFixed(2)}x)` : ''}.`,
+      cls: 'gain',
+    };
+  }
+  if (terminal === 'bailed') {
+    const tempAdd = round2(bussdownsTaskTemp(b, task) * 0.25);
+    b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempAdd));
+    return { outcome: 'bailed', amount: 0, mult: 1, jailed: false, message: `${task.name}: you bailed. No payout.`, cls: '' };
+  }
+  // terminal === 'burned' -- reaching this branch means you got sloppy; roll the same bust chance
+  // the old cycle model rolled per completion, just once here, boosted by whatever bustDelta the
+  // greedy options along the way piled onto convo.bustBonus.
+  const tempAdd = round2(bussdownsTaskTemp(b, task) * 0.5);
+  b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempAdd));
+  const bustRoll = Math.max(0, Math.min(0.9, task.bustChance + convo.bustBonus));
+  if (Math.random() < bustRoll) {
+    const years = BUSSDOWN_JAIL_YEARS + character.crimeRecord.streak;
+    character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
+    character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
+    character.jail.inJail = true;
+    character.jail.crime = task.name;
+    character.jail.yearsRemaining = years;
+    character.jail.serving = false;
+    const seized = applyArrestSeizure(character);
+    const streakNote = years > BUSSDOWN_JAIL_YEARS ? ` Repeat offender: +${years - BUSSDOWN_JAIL_YEARS} year(s) added to your usual sentence.` : '';
+    return {
+      outcome: 'burned', amount: 0, mult: 1, jailed: true,
+      message: `Busted running ${task.name}! Sentenced to ${years} year(s).${streakNote}${arrestSeizureNote(seized)}`,
+      cls: 'loss',
+    };
+  }
+  return { outcome: 'burned', amount: 0, mult: 1, jailed: false, message: `${task.name}: blew it, no payout -- but you got away clean.`, cls: 'loss' };
+}
+
 // Lazy tick, exactly like advanceFarmPlot -- pure function of elapsed wall-clock time, called by
 // every bussdowns route before it acts (and by the state route) instead of running a real
-// background job. Returns what happened this tick so callers can surface a message/jail redirect.
+// background job. Cooling only: a scam no longer completes or pays on its own, it only cools the
+// rig toward the idle floor and (implicitly, since overheat is just "temp >= max") clears the
+// overheat condition once temp drops back below it. There is no more offline/idle earning branch to
+// run here at all.
 function advanceBussdowns(character, now) {
   const b = ensureBussdownsState(character);
-
-  if (b.taskId) {
-    const task = BUSSDOWNS_TASKS_BY_ID[b.taskId];
-    if (!task) {
-      // Catalog entry vanished from under a running task (shouldn't happen outside dev/testing) --
-      // fail safe by just stopping the rig rather than throwing.
-      b.taskId = null;
-      b.startedAt = null;
-      b.lastTickAt = now;
-      return { overheated: false, jailed: false, message: null };
-    }
-    const durationMs = bussdownsTaskDuration(b, task);
-    const tempPerTask = bussdownsTaskTemp(b, task);
-    const elapsed = Math.max(0, now - b.startedAt);
-    const cyclesAvailable = Math.floor(elapsed / durationMs);
-    // Cap by how many cycles it takes to hit the ceiling from the CURRENT temp -- computed once up
-    // front (tempPerTask doesn't change mid-loop) so a huge rewind can't run more completions than
-    // physically fit before 100C.
-    const roomToCeiling = Math.max(0, BUSSDOWN_MAX_TEMP - b.temp);
-    const cyclesToOverheat = tempPerTask > 0 ? Math.ceil(roomToCeiling / tempPerTask) : Infinity;
-
-    let cyclesRun = 0;
-    let earned = 0;
-    let jailed = false;
-    for (let i = 0; i < cyclesAvailable; i += 1) {
-      if (cyclesRun >= cyclesToOverheat) break;
-      cyclesRun += 1;
-      earned += task.payout;
-      b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempPerTask));
-      b.completions += 1;
-      if (Math.random() < task.bustChance) {
-        jailed = true;
-        break;
-      }
-    }
-    if (earned > 0) {
-      character.cash = round2(character.cash + earned);
-      b.lifetimeEarned = round2(b.lifetimeEarned + earned);
-    }
-    // Partial progress toward the next cycle survives: startedAt only advances by whole cycles
-    // actually run, never dropping the elapsed remainder.
-    b.startedAt += cyclesRun * durationMs;
-
-    if (jailed) {
-      b.taskId = null;
-      b.startedAt = null;
-      const years = BUSSDOWN_JAIL_YEARS + character.crimeRecord.streak;
-      character.crimeRecord.streak = Math.min(CRIME_STREAK_MAX, character.crimeRecord.streak + 1);
-      character.alliance = clampStat(Math.max(character.alliance, GUZMAN_MIN_ALLIANCE));
-      character.jail.inJail = true;
-      character.jail.crime = task.name;
-      character.jail.yearsRemaining = years;
-      character.jail.serving = false;
-      const seized = applyArrestSeizure(character);
-      const streakNote = years > BUSSDOWN_JAIL_YEARS ? ` Repeat offender: +${years - BUSSDOWN_JAIL_YEARS} year(s) added to your usual sentence.` : '';
-      b.lastTickAt = now;
-      return {
-        overheated: false,
-        jailed: true,
-        message: `Busted running ${task.name}! Sentenced to ${years} year(s).${streakNote}${arrestSeizureNote(seized)}`,
-      };
-    }
-    if (b.temp >= BUSSDOWN_MAX_TEMP) {
-      b.taskId = null;
-      b.startedAt = null;
-      b.lastTickAt = now;
-      return { overheated: true, jailed: false, message: 'The rig overheated at 100C and shut itself down.' };
-    }
-    b.lastTickAt = now;
-    return { overheated: false, jailed: false, message: null };
-  }
-
-  // Stopped: temperature falls in real time only, floored at the idle temp.
   const elapsed = Math.max(0, now - b.lastTickAt);
   b.temp = Math.max(BUSSDOWN_IDLE_TEMP, round2(b.temp - elapsed * BUSSDOWN_COOL_RATE_PER_MS));
   b.lastTickAt = now;
@@ -4462,38 +4703,120 @@ function advanceBussdowns(character, now) {
 
 function doStartBussdowns(character, taskId) {
   const b = ensureBussdownsState(character);
-  const tick = advanceBussdowns(character, Date.now());
-  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
+  advanceBussdowns(character, Date.now());
   if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   if (character.alliance < GUZMAN_MIN_ALLIANCE) return { ok: false, reason: 'Bussdowns requires Bad alliance standing.' };
   const task = BUSSDOWNS_TASKS_BY_ID[taskId];
   if (!task) return { ok: false, reason: 'Unknown task.' };
   if (b.completions < task.unlockCompletions) return { ok: false, reason: `Unlocks after ${task.unlockCompletions} lifetime completions.` };
-  if (b.taskId) return { ok: false, reason: 'A task is already running -- stop it first.' };
+  if (b.convo) return { ok: false, reason: 'A conversation is already in flight -- finish or abandon it first.' };
   if (b.temp >= BUSSDOWN_MAX_TEMP) return { ok: false, reason: 'Rig is overheated -- let it cool down first.' };
-  b.taskId = taskId;
-  b.startedAt = Date.now();
-  const overheatNote = tick.overheated ? ` ${tick.message}` : '';
-  return { ok: true, jailed: false, message: `Started ${task.name}.${overheatNote}`, cls: 'gain', character };
+
+  const convo = { taskId, nodeId: null, payoutMult: 1, bustBonus: 0, startedAt: Date.now(), nodeEnteredAt: Date.now(), log: [] };
+  const root = task.script[0];
+  const result = bussdownsAdvance(b, task, convo, root.id);
+  if (result.terminal) {
+    // A script that terminates before ever offering a choice is a content bug, not a player
+    // action -- fail safe rather than 500, and don't touch cash/temp/jail for it.
+    return { ok: false, reason: 'This scam script has no decision points -- report this task.' };
+  }
+  convo.nodeId = result.node.id;
+  convo.nodeEnteredAt = Date.now();
+  b.convo = convo;
+  return {
+    ok: true, jailed: false, cls: '', character,
+    message: `Started ${task.name}.`,
+    convo: bussdownsConvoView(b, task, convo),
+  };
 }
 
-function doStopBussdowns(character) {
+function bussdownsConvoView(b, task, convo) {
+  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  const currentNode = convo.nodeId ? nodes[convo.nodeId] : null;
+  return {
+    taskId: convo.taskId,
+    taskName: task.name,
+    log: convo.log,
+    current: currentNode ? bussdownsRenderNode(b, currentNode) : null,
+    nodeEnteredAt: convo.nodeEnteredAt,
+  };
+}
+
+function doChoiceBussdowns(character, optionId) {
   const b = ensureBussdownsState(character);
-  const tick = advanceBussdowns(character, Date.now());
-  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
-  if (tick.overheated) return { ok: true, jailed: false, message: tick.message, cls: 'loss', character };
-  if (!b.taskId) return { ok: false, reason: 'Nothing is running.' };
-  b.taskId = null;
-  b.startedAt = null;
-  return { ok: true, jailed: false, message: 'Rig stopped.', cls: '', character };
+  advanceBussdowns(character, Date.now());
+  const convo = b.convo;
+  if (!convo) return { ok: false, reason: 'No conversation in progress.' };
+  const task = BUSSDOWNS_TASKS_BY_ID[convo.taskId];
+  if (!task) { b.convo = null; return { ok: false, reason: 'That scam script no longer exists.' }; }
+  const nodes = BUSSDOWNS_SCRIPT_NODES_BY_TASK[task.id];
+  const currentNode = nodes[convo.nodeId];
+  if (!currentNode || !currentNode.options) { b.convo = null; return { ok: false, reason: 'Conversation state is invalid.' }; }
+
+  // ANTI-SPAM: the option can't be legal before the current node's (rig-scaled) typing indicator
+  // has actually finished -- this, not a rate limiter, is what stops a script from being farmed by
+  // firing /choice as fast as the network allows.
+  const requiredMs = bussdownsScaledTypingMs(b, currentNode.typingMs);
+  const elapsedMs = Date.now() - convo.nodeEnteredAt;
+  if (elapsedMs < requiredMs - BUSSDOWNS_ANTI_SPAM_GRACE_MS) {
+    return { ok: false, reason: 'Too fast -- wait for the reply to finish.' };
+  }
+
+  // Never trust a client-sent nodeId -- the option must belong to the node the SERVER has as
+  // current. An optionId that's legal at some other node in the script but not this one is just as
+  // invalid as a made-up id.
+  const option = currentNode.options.find((o) => o.id === optionId);
+  if (!option) return { ok: false, reason: 'Not a valid reply right now.' };
+
+  bussdownsPushLog(convo, { from: 'you', text: option.text, typingMs: 0 });
+  convo.payoutMult = Math.max(0, convo.payoutMult * (option.effect.payoutMult ?? 1));
+  convo.bustBonus = Math.max(0, convo.bustBonus + (option.effect.bustDelta || 0));
+  if (option.effect.heatDelta) {
+    b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + option.effect.heatDelta));
+  }
+
+  const result = bussdownsAdvance(b, task, convo, option.effect.next);
+  if (result.terminal) {
+    const finalLog = convo.log;
+    const outcome = bussdownsResolveTerminal(character, b, task, convo, result.terminal);
+    b.convo = null;
+    return {
+      ok: true, jailed: outcome.jailed, cls: outcome.cls, character,
+      message: outcome.message,
+      terminal: outcome.outcome, amount: outcome.amount, mult: outcome.mult, log: finalLog,
+      bussdowns: b, parts: buildBussdownsParts(b), tasks: buildBussdownsTasksView(b),
+    };
+  }
+  convo.nodeId = result.node.id;
+  convo.nodeEnteredAt = Date.now();
+  return {
+    ok: true, jailed: false, cls: '', character,
+    message: null,
+    convo: bussdownsConvoView(b, task, convo),
+  };
+}
+
+function doAbandonBussdowns(character) {
+  const b = ensureBussdownsState(character);
+  advanceBussdowns(character, Date.now());
+  const convo = b.convo;
+  if (!convo) return { ok: false, reason: 'No conversation in progress.' };
+  const task = BUSSDOWNS_TASKS_BY_ID[convo.taskId];
+  // Walking out mid-scam: no payout, a small heat penalty (same weight as a voluntary bail inside
+  // the script), same reasoning as bailed above.
+  if (task) {
+    const tempAdd = round2(bussdownsTaskTemp(b, task) * 0.25);
+    b.temp = Math.min(BUSSDOWN_MAX_TEMP, round2(b.temp + tempAdd));
+  }
+  b.convo = null;
+  return { ok: true, jailed: false, cls: '', character, message: 'You walked away mid-conversation.' };
 }
 
 function doBuyBussdownsUpgrade(character, part) {
   const tiers = BUSSDOWNS_PART_TIERS[part];
   if (!tiers) return { ok: false, reason: 'Unknown part.' };
   const b = ensureBussdownsState(character);
-  const tick = advanceBussdowns(character, Date.now());
-  if (tick.jailed) return { ok: true, jailed: true, message: tick.message, cls: 'loss', character };
+  advanceBussdowns(character, Date.now());
   if (character.jail && character.jail.inJail) return { ok: false, reason: 'You are in jail.' };
   if (character.alliance < GUZMAN_MIN_ALLIANCE) return { ok: false, reason: 'Bussdowns requires Bad alliance standing.' };
   const tierKey = `${part}Tier`;
@@ -4502,8 +4825,7 @@ function doBuyBussdownsUpgrade(character, part) {
   if (character.cash < next.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
   character.cash = round2(character.cash - next.cost);
   b[tierKey] += 1;
-  const overheatNote = tick.overheated ? ` ${tick.message}` : '';
-  return { ok: true, jailed: false, message: `Installed ${next.name}.${overheatNote}`, cls: 'gain', character };
+  return { ok: true, jailed: false, message: `Installed ${next.name}.`, cls: 'gain', character };
 }
 
 // ---------- Drugs & Rugs: Altcoins (rug-pull system) ----------
@@ -5156,12 +5478,14 @@ module.exports = {
   ensureBussdownsState,
   advanceBussdowns,
   doStartBussdowns,
-  doStopBussdowns,
+  doChoiceBussdowns,
+  doAbandonBussdowns,
   doBuyBussdownsUpgrade,
   buildBussdownsParts,
   buildBussdownsTasksView,
-  bussdownsSecondsToOverheat,
+  bussdownsConvoView,
   bussdownsSecondsToIdle,
+  BUSSDOWNS_TASKS_BY_ID,
   BUSSDOWNS_TASKS,
   BUSSDOWNS_CPU_TIERS,
   BUSSDOWNS_GPU_TIERS,

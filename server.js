@@ -290,12 +290,14 @@ const {
   ensureBussdownsState,
   advanceBussdowns,
   doStartBussdowns,
-  doStopBussdowns,
+  doChoiceBussdowns,
+  doAbandonBussdowns,
   doBuyBussdownsUpgrade,
   buildBussdownsParts,
   buildBussdownsTasksView,
-  bussdownsSecondsToOverheat,
+  bussdownsConvoView,
   bussdownsSecondsToIdle,
+  BUSSDOWNS_TASKS_BY_ID,
   ALTCOIN_SUPPLY,
   altcoinPriceAt,
   doMintAltcoin,
@@ -2638,29 +2640,26 @@ app.post('/crypto/cold-storage/withdraw', requireAuth, (req, res) => {
 app.post('/crypto/cold-storage/upgrade', requireAuth, (req, res) => runAction(req, res, doBuyColdStorageUpgrade));
 
 // ---------- Bussdowns (PC scam rig) ----------
-// GET mutates (the lazy advance can pay out completions that happened since the last poll), same
-// as /farms/state advancing plot timers on read -- so it logs the cash delta and returns the
-// updated `character` itself, since (unlike Farms' plot advance) this lazy tick can move cash.
+// A scam is now a played CONVERSATION, not an auto-repeating timer -- there is no offline/idle
+// earning left in this feature at all. GET still mutates, but only to run the lazy cooling tick
+// (same lazy "advance on read" idiom Farms/Crypto use); it never touches cash, so no transaction log
+// entry is needed here any more.
 app.get('/bussdowns/state', requireAuth, (req, res) => {
   const user = getUserById(req.user.sub);
   if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
   const character = JSON.parse(user.character_json);
-  const cashBefore = character.cash;
   const tick = advanceBussdowns(character, Date.now());
-  const delta = round2(character.cash - cashBefore);
-  if (delta !== 0) {
-    logTransaction(user.id, `${character.firstName} ${character.lastName}`, 'advanceBussdowns', delta, character.cash);
-  }
   saveCharacter(user.id, character);
   const b = ensureBussdownsState(character);
+  const task = b.convo ? BUSSDOWNS_TASKS_BY_ID[b.convo.taskId] : null;
   res.json({
     ok: true,
     character,
     bussdowns: b,
     parts: buildBussdownsParts(b),
     tasks: buildBussdownsTasksView(b),
-    secondsToOverheat: bussdownsSecondsToOverheat(b),
     secondsToIdle: bussdownsSecondsToIdle(b),
+    convo: b.convo && task ? bussdownsConvoView(b, task, b.convo) : null,
     overheated: tick.overheated,
     jailed: tick.jailed,
     tickMessage: tick.message,
@@ -2670,7 +2669,11 @@ app.post('/bussdowns/start', requireAuth, (req, res) => {
   const { taskId } = req.body || {};
   runAction(req, res, doStartBussdowns, taskId);
 });
-app.post('/bussdowns/stop', requireAuth, (req, res) => runAction(req, res, doStopBussdowns));
+app.post('/bussdowns/choice', requireAuth, (req, res) => {
+  const { optionId } = req.body || {};
+  runAction(req, res, doChoiceBussdowns, optionId);
+});
+app.post('/bussdowns/abandon', requireAuth, (req, res) => runAction(req, res, doAbandonBussdowns));
 app.post('/bussdowns/upgrade', requireAuth, (req, res) => {
   const { part } = req.body || {};
   runAction(req, res, doBuyBussdownsUpgrade, part);
