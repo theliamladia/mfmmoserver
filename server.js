@@ -327,6 +327,21 @@ const {
   doDeleteWallPost,
   paginateWall,
   computeCharacterLevel,
+  characterOwnsTitle,
+  DRUG_ITEMS_BY_ID,
+  CRIB_STREETS,
+  CRIB_STREET_ORDER,
+  CRIB_TIERS,
+  ensureCribState,
+  doBuyCribPlot,
+  doUpgradeCrib,
+  doCribVaultDeposit,
+  doCribVaultWithdraw,
+  doCribStashDeposit,
+  doCribStashWithdraw,
+  doAddCribDisplay,
+  doRemoveCribDisplay,
+  doEquipCribVision,
 } = require('./gameLogic');
 
 const app = express();
@@ -601,6 +616,13 @@ app.get('/profile/:username', requireAuth, (req, res) => {
     if (profile.privacy.cash) character.cash = null;
     if (profile.privacy.fc && character.crypto) character.crypto = { ...character.crypto, fc: null };
     if (profile.privacy.portfolio) character.stocks = { holdings: {} };
+  }
+
+  // The Cribz vault/stash must never appear outside the owner's own Cribz tab (see the Cribz
+  // spec) -- the Profile page is not that tab, for the OWNER's own view either, so this always
+  // strips the hidden fields here rather than only for a non-owner viewer like the toggles above.
+  if (character.crib) {
+    character.crib = { ...character.crib, vault: undefined, stash: undefined };
   }
 
   // Scoped to this one profile (not the full global MTN board) -- only graded slabs count, since
@@ -2431,6 +2453,114 @@ app.post('/bank/cash-advance', requireAuth, (req, res) => {
   runAction(req, res, doBankCashAdvance, amount);
 });
 app.post('/bank/pay-credit', requireAuth, (req, res) => runAction(req, res, doBankPayCredit));
+
+// ---------- CRIBZ: plots, houses, vault, stash, slab display ----------
+app.get('/crib/state', requireAuth, (req, res) => {
+  const user = getUserById(req.user.sub);
+  if (!user) return res.status(404).json({ ok: false, reason: 'User not found.' });
+  const character = JSON.parse(user.character_json);
+  res.json({
+    ok: true,
+    crib: ensureCribState(character),
+    tiers: CRIB_TIERS,
+    streets: CRIB_STREETS,
+    streetOrder: CRIB_STREET_ORDER,
+  });
+});
+
+app.post('/crib/plot/buy', requireAuth, (req, res) => {
+  const { street } = req.body || {};
+  runAction(req, res, doBuyCribPlot, street);
+});
+
+app.post('/crib/upgrade', requireAuth, (req, res) => runAction(req, res, doUpgradeCrib));
+
+app.post('/crib/vault/deposit', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doCribVaultDeposit, amount);
+});
+app.post('/crib/vault/withdraw', requireAuth, (req, res) => {
+  const { amount } = req.body || {};
+  runAction(req, res, doCribVaultWithdraw, amount);
+});
+
+app.post('/crib/stash/deposit', requireAuth, (req, res) => {
+  const { itemId, qty } = req.body || {};
+  runAction(req, res, doCribStashDeposit, itemId, qty);
+});
+app.post('/crib/stash/withdraw', requireAuth, (req, res) => {
+  const { itemId, qty } = req.body || {};
+  runAction(req, res, doCribStashWithdraw, itemId, qty);
+});
+
+app.post('/crib/display/add', requireAuth, (req, res) => {
+  const { gradedId } = req.body || {};
+  runAction(req, res, doAddCribDisplay, gradedId);
+});
+app.post('/crib/display/remove', requireAuth, (req, res) => {
+  const { gradedId } = req.body || {};
+  runAction(req, res, doRemoveCribDisplay, gradedId);
+});
+
+app.post('/crib/vision/equip', requireAuth, (req, res) => {
+  const { visionId } = req.body || {};
+  runAction(req, res, doEquipCribVision, visionId);
+});
+
+// Every player with a house, shaped for the client's existing displayBadgeMarkupFor path -- the
+// EXACT same slim projection GET /players/all sends (titles/badges/stats), plus the street + tier
+// name. Never ships a whole character.
+app.get('/crib/neighbourhood', requireAuth, (req, res) => {
+  const rows = getAllUsersForDirectory();
+
+  const houses = rows
+    .map((row) => {
+      const character = JSON.parse(row.character_json);
+      const crib = ensureCribState(character);
+      if (!crib.street) return null;
+      const equippedTitleId = character.titles.equipped;
+      const customMatch = equippedTitleId
+        ? (character.titles.customTitles || []).find((t) => t.id === equippedTitleId)
+        : null;
+      return {
+        username: row.username,
+        firstName: character.firstName,
+        lastName: character.lastName,
+        stats: character.stats,
+        titles: {
+          equipped: equippedTitleId,
+          ...(customMatch ? { customTitles: [customMatch] } : {}),
+        },
+        badges: { equipped: character.badges && character.badges.equipped },
+        street: crib.street,
+        tierName: CRIB_TIERS[crib.tier].name,
+      };
+    })
+    .filter(Boolean);
+
+  res.json({ ok: true, houses, streetOrder: CRIB_STREET_ORDER, streets: CRIB_STREETS });
+});
+
+// The PUBLIC view of one player's house. PRIVATE FIELDS (vault balance, stash) are never sent --
+// only what a visitor is actually meant to see.
+app.get('/crib/visit/:username', requireAuth, (req, res) => {
+  const target = getUserByUsername(req.params.username);
+  if (!target) return res.status(404).json({ ok: false, reason: 'Player not found.' });
+  const character = JSON.parse(target.character_json);
+  const crib = ensureCribState(character);
+  if (!crib.street) return res.status(404).json({ ok: false, reason: 'That player has no house.' });
+
+  res.json({
+    ok: true,
+    username: target.username,
+    firstName: character.firstName,
+    lastName: character.lastName,
+    street: crib.street,
+    tierName: CRIB_TIERS[crib.tier].name,
+    display: crib.display,
+    visionId: crib.visionId, // public -- it's the point of the flex
+  });
+});
 
 app.post('/gunclub/gun', requireAuth, (req, res) => {
   const { itemId } = req.body || {};

@@ -393,6 +393,11 @@ function detachGradedIdFromShowcases(character, gradedId) {
   if (character.profile && character.profile.bannerTitleId === gradedId) {
     character.profile.bannerTitleId = null;
   }
+  // Cribz house display pins graded ids the same way the Portfolio Showcase does -- unpin here too,
+  // or a house would keep displaying a slab its owner no longer owns.
+  if (character.crib && Array.isArray(character.crib.display)) {
+    character.crib.display = character.crib.display.filter((id) => id !== gradedId);
+  }
 }
 
 // 10 stays genuinely rare; "Worn" (7-4) is the bulk of outcomes; "Sub" (3-1) is a real but small
@@ -3915,6 +3920,172 @@ function doBuyColdStorageUpgrade(character) {
   };
 }
 
+// ---------- CRIBZ: plots, houses, vault, stash, slab display ----------
+// One house per player; a street holds unlimited houses (many players share a street). A plot may
+// be bought ONCE -- moving streets is deliberately out of scope, so a second buy is rejected below.
+const CRIB_STREETS = {
+  nma: { id: 'nma', name: 'New Milos Avenue', cost: 250000 },
+  krog: { id: 'krog', name: 'Krog Street', cost: 600000 },
+  jobber: { id: 'jobber', name: 'Jobber Lane', cost: 1200000 },
+  midas: { id: 'midas', name: 'Midas Way', cost: 10000000 }, // deliberately the flex address
+};
+const CRIB_STREET_ORDER = ['nma', 'krog', 'jobber', 'midas'];
+
+// Index 0 is what a fresh plot gives you (Cheap Abode). Sequential upgrades only -- no tier
+// skipping -- so a downgrade (and therefore an orphaned display slot past the new cap) can never
+// happen.
+const CRIB_TIERS = [
+  { name: 'Cheap Abode', upgradeCost: 0, vaultCap: 50000, stashCap: 25, slabDisplay: 8 },
+  { name: 'Decent Abode', upgradeCost: 150000, vaultCap: 250000, stashCap: 60, slabDisplay: 8 },
+  { name: 'Abode', upgradeCost: 400000, vaultCap: 1000000, stashCap: 120, slabDisplay: 10 },
+  { name: 'Apartment', upgradeCost: 1000000, vaultCap: 3000000, stashCap: 250, slabDisplay: 12 },
+  { name: 'Suite', upgradeCost: 2500000, vaultCap: 8000000, stashCap: 500, slabDisplay: 14 },
+  { name: 'Penthouse', upgradeCost: 6000000, vaultCap: 20000000, stashCap: 1000, slabDisplay: 16 },
+  { name: 'Mansion', upgradeCost: 15000000, vaultCap: 50000000, stashCap: 2000, slabDisplay: 18 },
+  { name: 'Estate', upgradeCost: 40000000, vaultCap: 150000000, stashCap: 5000, slabDisplay: 20 },
+  { name: 'Palacial Estate', upgradeCost: 100000000, vaultCap: 500000000, stashCap: 10000, slabDisplay: 24 },
+];
+
+// Per-field backfill idiom, same as ensureCryptoState above -- null street means no plot yet.
+function ensureCribState(character) {
+  if (!character.crib) {
+    character.crib = { street: null, tier: 0, vault: 0, stash: {}, display: [], visionId: null };
+  }
+  if (character.crib.street === undefined) character.crib.street = null;
+  if (character.crib.tier === undefined) character.crib.tier = 0;
+  if (character.crib.vault === undefined) character.crib.vault = 0;
+  if (!character.crib.stash) character.crib.stash = {};
+  if (!Array.isArray(character.crib.display)) character.crib.display = [];
+  if (character.crib.visionId === undefined) character.crib.visionId = null;
+  return character.crib;
+}
+
+function cribStashTotalUnits(crib) {
+  return Object.values(crib.stash).reduce((sum, qty) => sum + (qty || 0), 0);
+}
+
+function doBuyCribPlot(character, street) {
+  const crib = ensureCribState(character);
+  if (crib.street) return { ok: false, reason: 'You already have a plot -- moving streets is not possible.' };
+  const def = CRIB_STREETS[street];
+  if (!def) return { ok: false, reason: 'Unknown street.' };
+  if (character.cash < def.cost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - def.cost);
+  crib.street = street;
+  crib.tier = 0;
+  return { ok: true, message: `Bought a plot on ${def.name}. Welcome to your ${CRIB_TIERS[0].name}.`, cls: 'gain', character };
+}
+
+function doUpgradeCrib(character) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  const nextTier = CRIB_TIERS[crib.tier + 1];
+  if (!nextTier) return { ok: false, reason: 'Your house is already at the highest tier.' };
+  if (character.cash < nextTier.upgradeCost) return { ok: false, reason: 'Not enough Floydbucks.' };
+  character.cash = round2(character.cash - nextTier.upgradeCost);
+  crib.tier += 1;
+  return { ok: true, message: `Upgraded to ${nextTier.name}!`, cls: 'gain', character };
+}
+
+// Mirrors doBankDeposit() exactly -- clamps to whatever room is left under the tier's vaultCap
+// instead of rejecting, same as the bank.
+function doCribVaultDeposit(character, amount) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  const tier = CRIB_TIERS[crib.tier];
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  if (amount > character.cash) return { ok: false, reason: 'Not enough Floydbucks on hand.' };
+  const room = tier.vaultCap - crib.vault;
+  if (room <= 0) return { ok: false, reason: 'Your vault is already at its max balance. Upgrade to deposit more.' };
+  const deposited = Math.min(amount, room);
+  character.cash = round2(character.cash - deposited);
+  crib.vault = round2(crib.vault + deposited);
+  return { ok: true, message: `Deposited $${deposited.toFixed(2)} to the vault.`, cls: 'gain', character };
+}
+
+// Mirrors doBankWithdraw() exactly.
+function doCribVaultWithdraw(character, amount) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid amount.' };
+  if (amount > crib.vault) return { ok: false, reason: 'Not enough in your vault.' };
+  crib.vault = round2(crib.vault - amount);
+  character.cash = round2(character.cash + amount);
+  return { ok: true, message: `Withdrew $${amount.toFixed(2)} from the vault.`, cls: 'gain', character };
+}
+
+function doCribStashDeposit(character, itemId, qty) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  if (!DRUG_ITEMS_BY_ID[itemId]) return { ok: false, reason: 'Unknown drug item.' };
+  const amount = Math.floor(qty);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid quantity.' };
+  if (inventoryQty(character, itemId) < amount) return { ok: false, reason: "You don't have that many." };
+  const tier = CRIB_TIERS[crib.tier];
+  const room = tier.stashCap - cribStashTotalUnits(crib);
+  if (room <= 0) return { ok: false, reason: 'Your stash is already full. Upgrade to stash more.' };
+  const moved = Math.min(amount, room);
+  removeFromInventory(character, itemId, moved);
+  crib.stash[itemId] = (crib.stash[itemId] || 0) + moved;
+  return { ok: true, message: `Stashed ${moved}x ${DRUG_ITEMS_BY_ID[itemId].name}.`, cls: 'gain', character };
+}
+
+function doCribStashWithdraw(character, itemId, qty) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  const amount = Math.floor(qty);
+  if (!amount || amount <= 0) return { ok: false, reason: 'Enter a valid quantity.' };
+  const have = crib.stash[itemId] || 0;
+  if (have < amount) return { ok: false, reason: "You don't have that many stashed." };
+  crib.stash[itemId] = have - amount;
+  if (crib.stash[itemId] <= 0) delete crib.stash[itemId];
+  addToInventory(character, itemId, amount);
+  const name = DRUG_ITEMS_BY_ID[itemId] ? DRUG_ITEMS_BY_ID[itemId].name : itemId;
+  return { ok: true, message: `Moved ${amount}x ${name} back to your inventory.`, cls: '', character };
+}
+
+// House slab display: the SAME ownership + is-graded checks doAddSlabShowcase performs, just
+// capped at the tier's slabDisplay instead of PROFILE_SLAB_SHOWCASE_MAX. A slab may be in both the
+// Portfolio Showcase and the house display at once -- they're independent surfaces, so no
+// cross-check against profile.slabShowcaseIds here.
+function doAddCribDisplay(character, gradedId) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  if (!gradedId) return { ok: false, reason: 'Unknown title.' };
+  if (!isGradedTitleId(gradedId)) return { ok: false, reason: 'Only graded slabs can go in the house display.' };
+  if (!characterOwnsTitle(character, gradedId)) return { ok: false, reason: "You don't own that slab." };
+  if (crib.display.includes(gradedId)) return { ok: false, reason: 'Already in your house display.' };
+  const tier = CRIB_TIERS[crib.tier];
+  if (crib.display.length >= tier.slabDisplay) {
+    return { ok: false, reason: `House display is full (max ${tier.slabDisplay}) -- remove one first.` };
+  }
+  crib.display.push(gradedId);
+  return { ok: true, message: 'Added to your house display.', cls: 'gain', character };
+}
+
+function doRemoveCribDisplay(character, gradedId) {
+  const crib = ensureCribState(character);
+  crib.display = crib.display.filter((id) => id !== gradedId);
+  return { ok: true, message: 'Removed from your house display.', cls: '', character };
+}
+
+// The house's OWN Vision slot -- separate from character.visions.equipped (js/visions.js), which
+// stays untouched by this. Available with any house, no tier gate (a one-line change -- gate on
+// crib.tier -- if a tier requirement is ever wanted here). Ownership is validated the same way
+// js/visions.js's equip path checks it client-side (an owned inventory stack / title), just
+// reusing characterOwnsTitle since Visions are opaque owned ids exactly like titles.
+function doEquipCribVision(character, visionId) {
+  const crib = ensureCribState(character);
+  if (!crib.street) return { ok: false, reason: 'Buy a plot first.' };
+  if (!visionId) {
+    crib.visionId = null;
+    return { ok: true, message: 'House Vision cleared.', cls: '', character };
+  }
+  if (!characterOwnsTitle(character, visionId)) return { ok: false, reason: "You don't own that Vision." };
+  crib.visionId = visionId;
+  return { ok: true, message: 'House Vision updated.', cls: 'gain', character };
+}
+
 function cryptoPrestigeRateMultiplier(prestigeLevel) {
   return Math.pow(1.5, prestigeLevel);
 }
@@ -4594,6 +4765,10 @@ function computeCharacterLevel(character) {
 }
 
 // Cash + bank balance + casino chips, minus any owed credit card balance.
+// Deliberately does NOT include character.crib.vault: the crib vault is meant to be hidden
+// everywhere outside the owner's own Cribz tab (see the Cribz spec), and net worth feeds the
+// KOLLECTOR/leaderboard surfaces every player can see about every other player -- folding the vault
+// balance in here would leak it right back out through the leaderboard. Leave it out.
 function computeNetWorth(character) {
   const bank = character.bank || {};
   return round2((character.cash || 0) + (bank.balance || 0) + (character.chips || 0) - (bank.creditBalance || 0));
@@ -5132,4 +5307,18 @@ module.exports = {
   randFloat,
   STOCK_SPREAD,
   BANK_TIERS,
+  DRUG_ITEMS_BY_ID,
+  CRIB_STREETS,
+  CRIB_STREET_ORDER,
+  CRIB_TIERS,
+  ensureCribState,
+  doBuyCribPlot,
+  doUpgradeCrib,
+  doCribVaultDeposit,
+  doCribVaultWithdraw,
+  doCribStashDeposit,
+  doCribStashWithdraw,
+  doAddCribDisplay,
+  doRemoveCribDisplay,
+  doEquipCribVision,
 };
